@@ -4,7 +4,9 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import {
+  cancelPickTicket,
   closePickTicket,
+  reopenPickTicket,
   createPickTicket,
   clearAuditLog,
   clearPickQueue,
@@ -13,6 +15,9 @@ import {
   importInventoryCsv,
   listAuditLog,
   listPickTickets,
+  listUserPickTicketHistory,
+  listNotifications,
+  markNotificationsRead,
   listParts,
   resetInventory,
 } from "./db.js";
@@ -82,8 +87,58 @@ app.get("/api/parts", (_req, res) => {
   res.json(listParts());
 });
 
-app.get("/api/pick-tickets", (_req, res) => {
-  res.json(listPickTickets());
+app.get("/api/pick-tickets", (req, res) => {
+  const status = String(req.query.status ?? "open").trim().toLowerCase();
+  const q = typeof req.query.q === "string" ? req.query.q : "";
+  const includeCancelled =
+    req.query.includeCancelled === "1" || req.query.includeCancelled === "true";
+  res.json(
+    listPickTickets({
+      status: status === "closed" ? "closed" : "open",
+      q,
+      includeCancelled,
+    }),
+  );
+});
+
+app.get("/api/notifications", (req, res) => {
+  const user = String(req.query.user ?? "").trim();
+  if (!user) {
+    res.status(400).json({ error: "user is required" });
+    return;
+  }
+  try {
+    const unreadOnly = req.query.unread === "1" || req.query.unread === "true";
+    res.json(listNotifications(user, { unreadOnly }));
+  } catch (e) {
+    res.status(400).json({ error: e.message || "invalid notifications request" });
+  }
+});
+
+app.post("/api/notifications/mark-read", (req, res) => {
+  const user = String(req.body?.user ?? "").trim();
+  if (!user) {
+    res.status(400).json({ error: "user is required" });
+    return;
+  }
+  try {
+    res.json(markNotificationsRead(user, req.body?.ids ?? []));
+  } catch (e) {
+    res.status(400).json({ error: e.message || "mark read failed" });
+  }
+});
+
+app.get("/api/history", (req, res) => {
+  const user = String(req.query.user ?? "").trim();
+  if (!user) {
+    res.status(400).json({ error: "user is required" });
+    return;
+  }
+  try {
+    res.json(listUserPickTicketHistory(user));
+  } catch (e) {
+    res.status(400).json({ error: e.message || "invalid history request" });
+  }
 });
 
 app.get("/api/pick-tickets/:id", (req, res) => {
@@ -109,6 +164,42 @@ app.post("/api/pick-tickets", (req, res) => {
   }
 });
 
+app.post("/api/pick-tickets/:id/cancel", (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id < 1) {
+    res.status(400).json({ error: "invalid id" });
+    return;
+  }
+  try {
+    const row = cancelPickTicket(id, { cancelled_by: req.body?.cancelled_by });
+    if (!row) {
+      res.status(404).json({ error: "not found" });
+      return;
+    }
+    res.json(row);
+  } catch (e) {
+    res.status(400).json({ error: e.message || "cancel failed" });
+  }
+});
+
+app.post("/api/pick-tickets/:id/reopen", (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id < 1) {
+    res.status(400).json({ error: "invalid id" });
+    return;
+  }
+  try {
+    const row = reopenPickTicket(id, { reopened_by: req.body?.reopened_by });
+    if (!row) {
+      res.status(404).json({ error: "not found" });
+      return;
+    }
+    res.json(row);
+  } catch (e) {
+    res.status(400).json({ error: e.message || "reopen failed" });
+  }
+});
+
 app.post("/api/pick-tickets/:id/close", (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id) || id < 1) {
@@ -116,7 +207,10 @@ app.post("/api/pick-tickets/:id/close", (req, res) => {
     return;
   }
   try {
-    const row = closePickTicket(id, { picker_name: req.body?.picker_name });
+    const row = closePickTicket(id, {
+      picker_name: req.body?.picker_name,
+      line_lots: req.body?.line_lots,
+    });
     if (!row) {
       res.status(404).json({ error: "not found" });
       return;

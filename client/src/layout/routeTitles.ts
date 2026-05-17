@@ -4,6 +4,7 @@ export function titleForPath(pathname: string): string {
   const map: Record<string, string> = {
     "/request": "Part Request Form",
     "/pick": "Picker Orders",
+    "/history": "History",
     "/audit": "Audit",
     "/inventory": "Inventory",
   };

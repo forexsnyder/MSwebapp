@@ -1,5 +1,6 @@
 import { Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
+import { NotificationBanner } from "../components/NotificationBanner";
 import { AppFooter } from "./AppFooter";
 import { AppHeader } from "./AppHeader";
 
@@ -19,6 +20,7 @@ export function Layout() {
     <div className={`app-viewport${tallFooter ? " app-viewport--tall-footer" : ""}`}>
       <AppHeader pathname={pathname} onLogout={handleLogout} />
       <main className="app-main app-main--shell">
+        <NotificationBanner />
         <Outlet />
       </main>
       <AppFooter />

@@ -119,6 +119,46 @@ function migrate() {
   if (ticketCols.length > 0 && !ticketCols.includes("closed_by")) {
     db.exec(`ALTER TABLE pick_tickets ADD COLUMN closed_by TEXT`);
   }
+  if (ticketCols.length > 0 && !ticketCols.includes("request_type")) {
+    db.exec(
+      `ALTER TABLE pick_tickets ADD COLUMN request_type TEXT NOT NULL DEFAULT 'issue' CHECK (request_type IN ('issue','scrap','return'))`,
+    );
+  }
+  if (ticketCols.length > 0 && !ticketCols.includes("manufacturing_order_id")) {
+    db.exec(`ALTER TABLE pick_tickets ADD COLUMN manufacturing_order_id TEXT NOT NULL DEFAULT ''`);
+  }
+  if (ticketCols.length > 0 && !ticketCols.includes("cancelled_at")) {
+    db.exec(`ALTER TABLE pick_tickets ADD COLUMN cancelled_at TEXT`);
+  }
+  if (ticketCols.length > 0 && !ticketCols.includes("cancelled_by")) {
+    db.exec(`ALTER TABLE pick_tickets ADD COLUMN cancelled_by TEXT`);
+  }
+
+  const lineCols = tableColumns("pick_ticket_lines");
+  if (lineCols.length > 0 && !lineCols.includes("lot_number")) {
+    db.exec(`ALTER TABLE pick_ticket_lines ADD COLUMN lot_number TEXT NOT NULL DEFAULT ''`);
+  }
+
+  if (invCols.length > 0 && !invCols.includes("lot_number")) {
+    db.exec(`ALTER TABLE inventory_parts ADD COLUMN lot_number TEXT NOT NULL DEFAULT ''`);
+    db.exec(
+      `UPDATE inventory_parts SET lot_number = 'LOT-' || printf('%04d', id) WHERE trim(lot_number) = ''`,
+    );
+  }
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS notifications (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      recipient_name TEXT NOT NULL,
+      pick_ticket_id INTEGER REFERENCES pick_tickets(id) ON DELETE SET NULL,
+      message TEXT NOT NULL,
+      read_at TEXT
+    )
+  `);
+  db.exec(
+    `CREATE INDEX IF NOT EXISTS idx_notifications_recipient ON notifications (recipient_name, read_at, created_at)`,
+  );
 }
 
 migrate();
@@ -136,8 +176,9 @@ const seed = db.prepare(`
     component_part_revision_id,
     to_issue_quantity,
     mo_status_code_description,
+    lot_number,
     updated_at
-  ) VALUES (?,?,?,?,?,?,?,?,?,?,?,datetime('now'))
+  ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))
 `);
 
 function sha256Hex(text) {
@@ -208,6 +249,7 @@ function seedIfEmpty() {
       component_part_revision_id: "test_comp_rev_1",
       to_issue_quantity: 5,
       mo_status_code_description: "In Shop",
+      lot_number: "LOT-1001-A",
     },
     {
       part_id: "test_part_002",
@@ -221,6 +263,7 @@ function seedIfEmpty() {
       component_part_revision_id: "test_comp_rev_2",
       to_issue_quantity: 12,
       mo_status_code_description: "In Shop",
+      lot_number: "LOT-1002-A",
     },
     {
       part_id: "test_part_003",
@@ -234,6 +277,7 @@ function seedIfEmpty() {
       component_part_revision_id: "test_comp_rev_3",
       to_issue_quantity: 1,
       mo_status_code_description: "In Shop",
+      lot_number: "LOT-1003-A",
     },
     {
       part_id: "test_part_004",
@@ -247,6 +291,7 @@ function seedIfEmpty() {
       component_part_revision_id: "test_comp_rev_4",
       to_issue_quantity: 0,
       mo_status_code_description: "In Shop",
+      lot_number: "LOT-1004-A",
     },
     {
       part_id: "test_part_005",
@@ -260,6 +305,7 @@ function seedIfEmpty() {
       component_part_revision_id: "test_comp_rev_5",
       to_issue_quantity: 3,
       mo_status_code_description: "In Shop",
+      lot_number: "LOT-1005-A",
     },
   ];
 
@@ -276,6 +322,7 @@ function seedIfEmpty() {
       r.component_part_revision_id,
       r.to_issue_quantity,
       r.mo_status_code_description,
+      r.lot_number,
     );
   }
 }
@@ -298,6 +345,7 @@ export function listParts() {
          component_part_revision_id,
          to_issue_quantity,
          mo_status_code_description,
+         lot_number,
          updated_at
        FROM inventory_parts
        ORDER BY part_id, part_revision_id`,
@@ -364,24 +412,148 @@ export function listAuditLog({ limit = 200 } = {}) {
     .all(safe);
 }
 
-export function listPickTickets() {
+const pickTicketSummarySql = `
+  SELECT
+    t.id,
+    t.created_at,
+    t.requester_name,
+    t.request_type,
+    t.manufacturing_order_id,
+    CASE WHEN t.cancelled_at IS NOT NULL THEN 'cancelled' ELSE t.status END AS status,
+    t.closed_at,
+    t.closed_by,
+    t.cancelled_at,
+    t.cancelled_by,
+    (SELECT COUNT(*) FROM pick_ticket_lines l WHERE l.pick_ticket_id = t.id) AS line_count
+  FROM pick_tickets t`;
+
+function assertPickTicketActive(cur) {
+  if (!cur) throw new Error("pick ticket not found");
+  if (cur.cancelled_at) throw new Error("pick ticket is cancelled");
+  if (cur.status === "closed") throw new Error("pick ticket is already closed");
+}
+
+function manufacturingOrderIdsForPartIds(inventoryPartIds) {
+  const sel = db.prepare(`SELECT DISTINCT manufacturing_order_id FROM inventory_parts WHERE id = ?`);
+  const mos = new Set();
+  for (const id of inventoryPartIds) {
+    const row = sel.get(id);
+    if (row?.manufacturing_order_id) mos.add(row.manufacturing_order_id);
+  }
+  return [...mos].sort((a, b) => a.localeCompare(b)).join(", ");
+}
+
+function formatTicketRef(id) {
+  return `TICKET-${String(id).padStart(6, "0")}`;
+}
+
+export function listPickTickets({ includeCancelled = false, status, q } = {}) {
+  const parts = [];
+  const params = [];
+
+  if (!includeCancelled) {
+    parts.push(`t.cancelled_at IS NULL`);
+  }
+
+  if (status === "closed") {
+    parts.push(`t.status = 'closed'`);
+  } else if (status === "open") {
+    parts.push(`t.status = 'open'`);
+  }
+
+  const query = String(q ?? "").trim().toLowerCase();
+  if (query) {
+    const pattern = `%${query}%`;
+    const idDigits = query.replace(/\D/g, "");
+    parts.push(`(
+      lower(trim(t.requester_name)) LIKE ?
+      OR lower(trim(coalesce(t.closed_by, ''))) LIKE ?
+      OR lower(trim(coalesce(t.cancelled_by, ''))) LIKE ?
+      OR lower(trim(coalesce(t.manufacturing_order_id, ''))) LIKE ?
+      OR lower(trim(coalesce(t.created_at, ''))) LIKE ?
+      OR lower(trim(coalesce(t.closed_at, ''))) LIKE ?
+      OR lower(printf('ticket-%06d', t.id)) LIKE ?
+      OR lower(cast(t.id AS TEXT)) LIKE ?
+      OR EXISTS (
+        SELECT 1
+        FROM pick_ticket_lines sl
+        JOIN inventory_parts sp ON sp.id = sl.inventory_part_id
+        WHERE sl.pick_ticket_id = t.id
+          AND (
+            lower(trim(sp.manufacturing_order_id)) LIKE ?
+            OR lower(trim(sp.component_part_id)) LIKE ?
+            OR lower(trim(sp.part_id)) LIKE ?
+            OR lower(trim(coalesce(sl.lot_number, ''))) LIKE ?
+            OR lower(trim(coalesce(sp.lot_number, ''))) LIKE ?
+          )
+      )
+      ${idDigits ? `OR cast(t.id AS TEXT) LIKE ?` : ""}
+    )`);
+    params.push(
+      pattern,
+      pattern,
+      pattern,
+      pattern,
+      pattern,
+      pattern,
+      pattern,
+      pattern,
+      pattern,
+      pattern,
+      pattern,
+      pattern,
+      pattern,
+    );
+    if (idDigits) params.push(`%${idDigits}%`);
+  }
+
+  const where = parts.length ? ` WHERE ${parts.join(" AND ")}` : "";
+  const order =
+    status === "closed"
+      ? `datetime(t.closed_at) DESC, t.id DESC`
+      : `datetime(t.created_at) DESC, t.id DESC`;
+
   return db
+    .prepare(`${pickTicketSummarySql}${where} ORDER BY ${order}`)
+    .all(...params);
+}
+
+export function listUserPickTicketHistory(username) {
+  const u = String(username ?? "").trim();
+  if (!u) throw new Error("user is required");
+  const requested = db
     .prepare(
-      `SELECT
-         t.id,
-         t.created_at,
-         t.requester_name,
-         t.status,
-         (SELECT COUNT(*) FROM pick_ticket_lines l WHERE l.pick_ticket_id = t.id) AS line_count
-       FROM pick_tickets t
+      `${pickTicketSummarySql}
+       WHERE lower(trim(t.requester_name)) = lower(?)
        ORDER BY datetime(t.created_at) DESC, t.id DESC`,
     )
-    .all();
+    .all(u);
+  const picked = db
+    .prepare(
+      `${pickTicketSummarySql}
+       WHERE t.status = 'closed' AND lower(trim(t.closed_by)) = lower(?)
+       ORDER BY datetime(t.closed_at) DESC, t.id DESC`,
+    )
+    .all(u);
+  return { requested, picked };
 }
 
 export function getPickTicket(id) {
   const ticket = db
-    .prepare(`SELECT id, created_at, requester_name, status, closed_at, closed_by FROM pick_tickets WHERE id = ?`)
+    .prepare(
+      `SELECT
+         id,
+         created_at,
+         requester_name,
+         request_type,
+         manufacturing_order_id,
+         CASE WHEN cancelled_at IS NOT NULL THEN 'cancelled' ELSE status END AS status,
+         closed_at,
+         closed_by,
+         cancelled_at,
+         cancelled_by
+       FROM pick_tickets WHERE id = ?`,
+    )
     .get(id);
   if (!ticket) return null;
   const lines = db
@@ -390,6 +562,7 @@ export function getPickTicket(id) {
          l.id,
          l.inventory_part_id,
          l.requested_quantity,
+         l.lot_number,
          p.part_id,
          p.part_revision_id,
          p.on_hand_quantity,
@@ -400,20 +573,29 @@ export function getPickTicket(id) {
          p.component_part_id,
          p.component_part_revision_id,
          p.to_issue_quantity,
-         p.mo_status_code_description
+         p.mo_status_code_description,
+         p.lot_number AS inventory_lot_number
        FROM pick_ticket_lines l
        JOIN inventory_parts p ON p.id = l.inventory_part_id
        WHERE l.pick_ticket_id = ?
        ORDER BY l.id ASC`,
     )
     .all(id);
-  return { ...ticket, lines };
+  return {
+    ...ticket,
+    lines: lines.map((ln) => ({
+      ...ln,
+      lot_number: String(ln.lot_number || ln.inventory_lot_number || "").trim(),
+    })),
+  };
 }
 
-export function createPickTicket({ requester_name, lines }) {
+export function createPickTicket({ requester_name, request_type, lines }) {
   const requester = String(requester_name ?? "").trim();
   if (!requester) throw new Error("requester_name is required");
   if (!Array.isArray(lines) || lines.length === 0) throw new Error("lines are required");
+  const typeRaw = String(request_type ?? "issue").trim().toLowerCase();
+  const requestType = ["issue", "scrap", "return"].includes(typeRaw) ? typeRaw : "issue";
 
   const normalized = lines.map((ln) => {
     const inventory_part_id = Number(ln?.inventory_part_id);
@@ -427,20 +609,29 @@ export function createPickTicket({ requester_name, lines }) {
     return { inventory_part_id, requested_quantity };
   });
 
+  const manufacturing_order_id = manufacturingOrderIdsForPartIds(
+    normalized.map((ln) => ln.inventory_part_id),
+  );
+
   const tx = db.transaction(() => {
     const info = db
-      .prepare(`INSERT INTO pick_tickets (requester_name) VALUES (?)`)
-      .run(requester);
+      .prepare(
+        `INSERT INTO pick_tickets (requester_name, request_type, manufacturing_order_id) VALUES (?, ?, ?)`,
+      )
+      .run(requester, requestType, manufacturing_order_id);
     const ticketId = info.lastInsertRowid;
     const insLine = db.prepare(
-      `INSERT INTO pick_ticket_lines (pick_ticket_id, inventory_part_id, requested_quantity)
-       VALUES (?,?,?)`,
+      `INSERT INTO pick_ticket_lines (pick_ticket_id, inventory_part_id, requested_quantity, lot_number)
+       VALUES (?,?,?,?)`,
+    );
+    const invRow = db.prepare(
+      `SELECT id, lot_number FROM inventory_parts WHERE id = ?`,
     );
     for (const ln of normalized) {
-      // Ensure inventory part exists
-      const inv = db.prepare(`SELECT id FROM inventory_parts WHERE id = ?`).get(ln.inventory_part_id);
+      const inv = invRow.get(ln.inventory_part_id);
       if (!inv) throw new Error(`inventory_part_id not found: ${ln.inventory_part_id}`);
-      insLine.run(ticketId, ln.inventory_part_id, ln.requested_quantity);
+      const lot = String(inv.lot_number ?? "").trim();
+      insLine.run(ticketId, ln.inventory_part_id, ln.requested_quantity, lot);
     }
     return ticketId;
   });
@@ -457,25 +648,81 @@ export function createPickTicket({ requester_name, lines }) {
   return ticket;
 }
 
-export function closePickTicket(id, { picker_name }) {
+export function closePickTicket(id, { picker_name, line_lots }) {
   const tid = Number(id);
   if (!Number.isInteger(tid) || tid < 1) throw new Error("invalid id");
   const picker = String(picker_name ?? "").trim();
   if (!picker) throw new Error("picker_name is required");
 
   const cur = db
-    .prepare(`SELECT id, status FROM pick_tickets WHERE id = ?`)
+    .prepare(
+      `SELECT id, status, requester_name, request_type, manufacturing_order_id, cancelled_at
+       FROM pick_tickets WHERE id = ?`,
+    )
     .get(tid);
   if (!cur) return null;
-  if (cur.status === "closed") {
+  if (cur.status === "closed" || cur.cancelled_at) {
     return getPickTicket(tid);
   }
 
-  db.prepare(
-    `UPDATE pick_tickets
-     SET status = 'closed', closed_at = datetime('now'), closed_by = ?
-     WHERE id = ?`,
-  ).run(picker, tid);
+  const lotByLineId = new Map();
+  if (Array.isArray(line_lots)) {
+    for (const row of line_lots) {
+      const lineId = Number(row?.line_id);
+      if (!Number.isInteger(lineId) || lineId < 1) continue;
+      lotByLineId.set(lineId, String(row?.lot_number ?? "").trim());
+    }
+  }
+
+  const tx = db.transaction(() => {
+    const lines = db
+      .prepare(
+        `SELECT l.id, l.inventory_part_id, l.requested_quantity, p.lot_number AS inventory_lot_number
+         FROM pick_ticket_lines l
+         JOIN inventory_parts p ON p.id = l.inventory_part_id
+         WHERE l.pick_ticket_id = ?`,
+      )
+      .all(tid);
+
+    const setLot = db.prepare(`UPDATE pick_ticket_lines SET lot_number = ? WHERE id = ?`);
+    const adjustOnHand = db.prepare(
+      `UPDATE inventory_parts SET on_hand_quantity = ?, updated_at = datetime('now') WHERE id = ?`,
+    );
+    const readOnHand = db.prepare(`SELECT on_hand_quantity FROM inventory_parts WHERE id = ?`);
+
+    for (const ln of lines) {
+      const lot =
+        lotByLineId.get(ln.id) || String(ln.inventory_lot_number ?? "").trim() || "UNASSIGNED";
+      setLot.run(lot, ln.id);
+
+      const qty = Number(ln.requested_quantity);
+      if (qty <= 0) continue;
+      const inv = readOnHand.get(ln.inventory_part_id);
+      if (!inv) continue;
+      let next = Number(inv.on_hand_quantity);
+      if (cur.request_type === "return") {
+        next += qty;
+      } else {
+        next = Math.max(0, next - qty);
+      }
+      adjustOnHand.run(next, ln.inventory_part_id);
+    }
+
+    db.prepare(
+      `UPDATE pick_tickets
+       SET status = 'closed', closed_at = datetime('now'), closed_by = ?
+       WHERE id = ?`,
+    ).run(picker, tid);
+
+    const moLabel = cur.manufacturing_order_id || "—";
+    const typeLabel = String(cur.request_type ?? "issue").toUpperCase();
+    const message = `Your ${typeLabel} request ${formatTicketRef(tid)} (MO ${moLabel}) was picked by ${picker}.`;
+    db.prepare(
+      `INSERT INTO notifications (recipient_name, pick_ticket_id, message) VALUES (?, ?, ?)`,
+    ).run(cur.requester_name, tid, message);
+  });
+
+  tx();
 
   const ticket = getPickTicket(tid);
   appendAudit({
@@ -486,6 +733,148 @@ export function closePickTicket(id, { picker_name }) {
     payload: ticket,
   });
   return ticket;
+}
+
+export function cancelPickTicket(id, { cancelled_by }) {
+  const tid = Number(id);
+  if (!Number.isInteger(tid) || tid < 1) throw new Error("invalid id");
+  const actor = String(cancelled_by ?? "").trim();
+  if (!actor) throw new Error("cancelled_by is required");
+
+  const cur = db
+    .prepare(
+      `SELECT id, status, requester_name, request_type, manufacturing_order_id, cancelled_at
+       FROM pick_tickets WHERE id = ?`,
+    )
+    .get(tid);
+  if (!cur) return null;
+  if (cur.cancelled_at) return getPickTicket(tid);
+  assertPickTicketActive(cur);
+
+  db.prepare(
+    `UPDATE pick_tickets
+     SET cancelled_at = datetime('now'), cancelled_by = ?
+     WHERE id = ?`,
+  ).run(actor, tid);
+
+  const ticket = getPickTicket(tid);
+  const moLabel = cur.manufacturing_order_id || "—";
+  const typeLabel = String(cur.request_type ?? "issue").toUpperCase();
+  const message = `Your ${typeLabel} request ${formatTicketRef(tid)} (MO ${moLabel}) was cancelled by ${actor}.`;
+  db.prepare(
+    `INSERT INTO notifications (recipient_name, pick_ticket_id, message) VALUES (?, ?, ?)`,
+  ).run(cur.requester_name, tid, message);
+
+  appendAudit({
+    actor,
+    action: "pick_ticket_cancelled",
+    entity: "pick_ticket",
+    entity_id: String(tid),
+    payload: ticket,
+  });
+  return ticket;
+}
+
+export function reopenPickTicket(id, { reopened_by }) {
+  const tid = Number(id);
+  if (!Number.isInteger(tid) || tid < 1) throw new Error("invalid id");
+  const actor = String(reopened_by ?? "").trim();
+  if (!actor) throw new Error("reopened_by is required");
+
+  const cur = db
+    .prepare(
+      `SELECT id, status, request_type, requester_name, manufacturing_order_id, cancelled_at
+       FROM pick_tickets WHERE id = ?`,
+    )
+    .get(tid);
+  if (!cur) return null;
+  if (cur.cancelled_at) throw new Error("cancelled tickets cannot be reopened");
+  if (cur.status !== "closed") {
+    return getPickTicket(tid);
+  }
+
+  const tx = db.transaction(() => {
+    const lines = db
+      .prepare(
+        `SELECT inventory_part_id, requested_quantity
+         FROM pick_ticket_lines
+         WHERE pick_ticket_id = ?`,
+      )
+      .all(tid);
+
+    const adjustOnHand = db.prepare(
+      `UPDATE inventory_parts SET on_hand_quantity = ?, updated_at = datetime('now') WHERE id = ?`,
+    );
+    const readOnHand = db.prepare(`SELECT on_hand_quantity FROM inventory_parts WHERE id = ?`);
+
+    for (const ln of lines) {
+      const qty = Number(ln.requested_quantity);
+      if (qty <= 0) continue;
+      const inv = readOnHand.get(ln.inventory_part_id);
+      if (!inv) continue;
+      let next = Number(inv.on_hand_quantity);
+      if (cur.request_type === "return") {
+        next = Math.max(0, next - qty);
+      } else {
+        next += qty;
+      }
+      adjustOnHand.run(next, ln.inventory_part_id);
+    }
+
+    db.prepare(
+      `UPDATE pick_tickets
+       SET status = 'open', closed_at = NULL, closed_by = NULL
+       WHERE id = ?`,
+    ).run(tid);
+  });
+
+  tx();
+
+  const ticket = getPickTicket(tid);
+  appendAudit({
+    actor,
+    action: "pick_ticket_reopened",
+    entity: "pick_ticket",
+    entity_id: String(tid),
+    payload: ticket,
+  });
+  return ticket;
+}
+
+export function listNotifications(recipientName, { unreadOnly = false } = {}) {
+  const recipient = String(recipientName ?? "").trim();
+  if (!recipient) throw new Error("recipient is required");
+  const sql = unreadOnly
+    ? `SELECT id, created_at, recipient_name, pick_ticket_id, message, read_at
+       FROM notifications
+       WHERE lower(trim(recipient_name)) = lower(?) AND read_at IS NULL
+       ORDER BY datetime(created_at) DESC, id DESC`
+    : `SELECT id, created_at, recipient_name, pick_ticket_id, message, read_at
+       FROM notifications
+       WHERE lower(trim(recipient_name)) = lower(?)
+       ORDER BY datetime(created_at) DESC, id DESC`;
+  return db.prepare(sql).all(recipient);
+}
+
+export function markNotificationsRead(recipientName, ids) {
+  const recipient = String(recipientName ?? "").trim();
+  if (!recipient) throw new Error("recipient is required");
+  if (!Array.isArray(ids) || ids.length === 0) return { updated: 0 };
+  const normalized = ids
+    .map((id) => Number(id))
+    .filter((id) => Number.isInteger(id) && id > 0);
+  if (normalized.length === 0) return { updated: 0 };
+  const placeholders = normalized.map(() => "?").join(", ");
+  const info = db
+    .prepare(
+      `UPDATE notifications
+       SET read_at = datetime('now')
+       WHERE lower(trim(recipient_name)) = lower(?)
+         AND read_at IS NULL
+         AND id IN (${placeholders})`,
+    )
+    .run(recipient, ...normalized);
+  return { updated: info.changes };
 }
 
 function parseCsv(text) {

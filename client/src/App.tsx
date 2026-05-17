@@ -5,6 +5,7 @@ import { InventoryAdminPage } from "./pages/InventoryAdminPage";
 import { AuditorPage } from "./pages/AuditorPage";
 import { LandingPage } from "./pages/LandingPage";
 import { LoginGate } from "./pages/LoginGate";
+import { HistoryPage } from "./pages/HistoryPage";
 import { PickOrdersPage } from "./pages/PickOrdersPage";
 import { RequestPartsPage } from "./pages/RequestPartsPage";
 
@@ -23,6 +24,7 @@ export default function App() {
         <Route index element={<LandingPage />} />
         <Route path="request" element={<RequestPartsPage />} />
         <Route path="pick" element={<PickOrdersPage />} />
+        <Route path="history" element={<HistoryPage />} />
         <Route path="audit" element={<AuditorPage />} />
         <Route path="inventory" element={<InventoryAdminPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />

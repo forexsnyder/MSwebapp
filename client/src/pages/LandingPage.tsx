@@ -14,6 +14,12 @@ const cards = [
     tag: "Pick orders",
   },
   {
+    to: "/history",
+    title: "History",
+    desc: "See pick tickets you requested and tickets you completed as picker.",
+    tag: "My activity",
+  },
+  {
     to: "/audit",
     title: "Auditor",
     desc: "Review tamper-evident audit log entries, import latest inventory CSV, and export on-site inventory.",

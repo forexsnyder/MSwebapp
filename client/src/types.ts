@@ -12,6 +12,7 @@ export type Part = {
   component_part_revision_id: string;
   to_issue_quantity: number;
   mo_status_code_description: string;
+  lot_number: string;
 };
 
 export type Order = {
@@ -25,10 +26,13 @@ export type Order = {
   mo_status_code_description: string;
 };
 
+export type RequestType = "issue" | "scrap" | "return";
+
 export type PickTicketLine = {
   id: number;
   inventory_part_id: number;
   requested_quantity: number;
+  lot_number: string;
   part_id: string;
   part_revision_id: string;
   on_hand_quantity: number;
@@ -40,15 +44,20 @@ export type PickTicketLine = {
   component_part_revision_id: string;
   to_issue_quantity: number;
   mo_status_code_description: string;
+  inventory_lot_number?: string;
 };
 
 export type PickTicket = {
   id: number;
   created_at: string;
   requester_name: string;
-  status: "open" | "closed";
+  request_type: RequestType;
+  manufacturing_order_id: string;
+  status: "open" | "closed" | "cancelled";
   closed_at: string | null;
   closed_by: string | null;
+  cancelled_at: string | null;
+  cancelled_by: string | null;
   lines: PickTicketLine[];
 };
 
@@ -56,8 +65,28 @@ export type PickTicketSummary = {
   id: number;
   created_at: string;
   requester_name: string;
-  status: "open" | "closed";
+  request_type: RequestType;
+  manufacturing_order_id: string;
+  status: "open" | "closed" | "cancelled";
   line_count: number;
+  closed_at: string | null;
+  closed_by: string | null;
+  cancelled_at: string | null;
+  cancelled_by: string | null;
+};
+
+export type UserPickTicketHistory = {
+  requested: PickTicketSummary[];
+  picked: PickTicketSummary[];
+};
+
+export type AppNotification = {
+  id: number;
+  created_at: string;
+  recipient_name: string;
+  pick_ticket_id: number | null;
+  message: string;
+  read_at: string | null;
 };
 
 export type AuditLogEntry = {

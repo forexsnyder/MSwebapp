@@ -5,8 +5,17 @@ import { useAuth } from "../auth/AuthContext";
 
 const DUMMY_REQUESTER_NAME = "Test_Steve";
 
+type RequestType = "issue" | "scrap" | "return";
+
+const REQUEST_TYPE_OPTIONS: { value: RequestType; label: string }[] = [
+  { value: "issue", label: "Issue" },
+  { value: "scrap", label: "Scrap" },
+  { value: "return", label: "Return" },
+];
+
 export function RequestPartsPage() {
   const { user } = useAuth();
+  const requesterName = user?.trim() || DUMMY_REQUESTER_NAME;
   const [parts, setParts] = useState<Part[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -14,9 +23,9 @@ export function RequestPartsPage() {
 
   const [cart, setCart] = useState<Record<number, number>>({});
   const [createdTicketId, setCreatedTicketId] = useState<number | null>(null);
+  const [requestType, setRequestType] = useState<RequestType>("issue");
   const [selectedMoId, setSelectedMoId] = useState("");
   const [selectedComponentPartId, setSelectedComponentPartId] = useState("");
-  const [selectedComponentPartRevisionId, setSelectedComponentPartRevisionId] = useState("");
   const [qtyDraft, setQtyDraft] = useState("1");
 
   useEffect(() => {
@@ -84,30 +93,17 @@ export function RequestPartsPage() {
     return ids.map((id) => ({ value: id, label: id }));
   }, [partsForMo]);
 
-  const partsForComponent = useMemo(() => {
-    if (!selectedComponentPartId) return [];
-    return partsForMo.filter((p) => p.component_part_id === selectedComponentPartId);
-  }, [partsForMo, selectedComponentPartId]);
-
-  const componentPartRevisionOptions = useMemo(() => {
-    const revs = Array.from(new Set(partsForComponent.map((p) => p.component_part_revision_id)));
-    revs.sort((a, b) => a.localeCompare(b));
-    return revs.map((rev) => ({ value: rev, label: rev }));
-  }, [partsForComponent]);
-
   const selectedPart = useMemo(() => {
-    if (!selectedMoId || !selectedComponentPartId || !selectedComponentPartRevisionId) return null;
+    if (!selectedMoId || !selectedComponentPartId) return null;
     const matches = parts
       .filter(
         (p) =>
-          p.manufacturing_order_id === selectedMoId &&
-          p.component_part_id === selectedComponentPartId &&
-          p.component_part_revision_id === selectedComponentPartRevisionId,
+          p.manufacturing_order_id === selectedMoId && p.component_part_id === selectedComponentPartId,
       )
       .slice()
       .sort((a, b) => (a.part_id + a.part_revision_id).localeCompare(b.part_id + b.part_revision_id));
     return matches[0] ?? null;
-  }, [parts, selectedComponentPartId, selectedComponentPartRevisionId, selectedMoId]);
+  }, [parts, selectedComponentPartId, selectedMoId]);
 
   const selectedPartInShop = useMemo(() => {
     if (!selectedPart) return false;
@@ -117,13 +113,7 @@ export function RequestPartsPage() {
   useEffect(() => {
     // When MO changes, reset dependent selection/search.
     setSelectedComponentPartId("");
-    setSelectedComponentPartRevisionId("");
   }, [selectedMoId]);
-
-  useEffect(() => {
-    // When component part changes, reset dependent selection.
-    setSelectedComponentPartRevisionId("");
-  }, [selectedComponentPartId]);
 
   function addSelectedToCart() {
     setError(null);
@@ -134,10 +124,6 @@ export function RequestPartsPage() {
     }
     if (!selectedComponentPartId) {
       setError("Select a Component Part ID for the chosen MO.");
-      return;
-    }
-    if (!selectedComponentPartRevisionId) {
-      setError("Select a Component Part Revision ID for the chosen MO/component.");
       return;
     }
     if (!selectedPart) {
@@ -156,7 +142,6 @@ export function RequestPartsPage() {
     setCart((prev) => ({ ...prev, [selectedPart.id]: q }));
     setQtyDraft("1");
     setSelectedComponentPartId("");
-    setSelectedComponentPartRevisionId("");
   }
 
   function removeFromCart(id: number) {
@@ -177,18 +162,18 @@ export function RequestPartsPage() {
     e.preventDefault();
     setError(null);
     setCreatedTicketId(null);
-    const name = DUMMY_REQUESTER_NAME;
+    const name = requesterName;
     if (cartItems.length === 0) {
       setError("Cart is empty.");
       return;
     }
-
     setBusy(true);
     const res = await fetch("/api/pick-tickets", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         requester_name: name,
+        request_type: requestType,
         lines: cartItems.map((ci) => ({
           inventory_part_id: ci.part.id,
           requested_quantity: ci.requested_quantity,
@@ -233,22 +218,43 @@ export function RequestPartsPage() {
                   <span className="field__label">Requester Name</span>
                   <input
                     className="field__input"
-                    value={DUMMY_REQUESTER_NAME}
+                    value={requesterName}
                     readOnly
                     aria-readonly="true"
                   />
                 </label>
                 <p className="muted small requester-build__requester-note">
-                  Populated from authentication (dummy): <span className="mono">{DUMMY_REQUESTER_NAME}</span>
                   {user ? (
                     <>
-                      {" "}
-                      · session user: <span className="mono">{user}</span>
+                      Signed in as <span className="mono">{user}</span>
                     </>
-                  ) : null}
+                  ) : (
+                    <>
+                      Using test requester <span className="mono">{DUMMY_REQUESTER_NAME}</span>
+                    </>
+                  )}
                 </p>
 
                 <div className="stack-form stack-form--request">
+                  <fieldset className="field request-type-field">
+                    <legend className="field__label">Request type</legend>
+                    <div className="request-type-options" role="radiogroup" aria-label="Request type">
+                      {REQUEST_TYPE_OPTIONS.map(({ value, label }) => (
+                        <label key={value} className="request-type-option">
+                          <input
+                            type="radio"
+                            name="request-type"
+                            className="request-type-option__input"
+                            value={value}
+                            checked={requestType === value}
+                            onChange={() => setRequestType(value)}
+                          />
+                          <span className="request-type-option__label">{label}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </fieldset>
+
                   <SearchableSelect
                     label="Manufacturing Order ID"
                     value={selectedMoId}
@@ -268,16 +274,6 @@ export function RequestPartsPage() {
                     onChange={(v) => setSelectedComponentPartId(v)}
                   />
 
-                  <SearchableSelect
-                    label="Component Part Revision ID"
-                    value={selectedComponentPartRevisionId}
-                    options={componentPartRevisionOptions}
-                    placeholder={selectedComponentPartId ? "Select component rev…" : "Select component part first"}
-                    searchPlaceholder="Search Component Part Revisions…"
-                    disabled={!selectedMoId || !selectedComponentPartId}
-                    onChange={(v) => setSelectedComponentPartRevisionId(v)}
-                  />
-
                   <label className="field">
                     <span className="field__label">Quantity</span>
                     <input
@@ -294,13 +290,7 @@ export function RequestPartsPage() {
                     type="button"
                     className="btn btn--primary btn--submit-wide"
                     onClick={addSelectedToCart}
-                    disabled={
-                      !selectedMoId ||
-                      !selectedComponentPartId ||
-                      !selectedComponentPartRevisionId ||
-                      !selectedPart ||
-                      !selectedPartInShop
-                    }
+                    disabled={!selectedMoId || !selectedComponentPartId || !selectedPart || !selectedPartInShop}
                   >
                     Add to cart
                   </button>
@@ -310,8 +300,7 @@ export function RequestPartsPage() {
               {selectedPart && (
                 <p className="muted small" style={{ marginTop: "0.5rem" }}>
                   Selected: MO <span className="mono">{selectedPart.manufacturing_order_id}</span> · component{" "}
-                  <span className="mono">{selectedPart.component_part_id}</span> rev{" "}
-                  <span className="mono">{selectedPart.component_part_revision_id}</span> · to-issue{" "}
+                  <span className="mono">{selectedPart.component_part_id}</span> · to-issue{" "}
                   <strong>{selectedPart.to_issue_quantity}</strong> · MO status{" "}
                   <span className="mono">{selectedPart.mo_status_code_description}</span>
                 </p>
@@ -335,10 +324,8 @@ export function RequestPartsPage() {
                           <thead>
                             <tr>
                               <th>Component Part</th>
-                              <th>Comp Rev</th>
                               <th>Requested qty</th>
                               <th>To-issue qty</th>
-                              <th>MO status</th>
                               <th>On hand</th>
                               <th />
                             </tr>
@@ -347,7 +334,6 @@ export function RequestPartsPage() {
                             {rows.map(({ part, requested_quantity }) => (
                               <tr key={part.id}>
                                 <td className="mono">{part.component_part_id}</td>
-                                <td className="mono small">{part.component_part_revision_id}</td>
                                 <td>
                                   <input
                                     className="field__input field__input--narrow"
@@ -360,7 +346,6 @@ export function RequestPartsPage() {
                                   />
                                 </td>
                                 <td>{part.to_issue_quantity}</td>
-                                <td className="mono small">{part.mo_status_code_description}</td>
                                 <td>{part.on_hand_quantity}</td>
                                 <td>
                                   <div className="row-actions">
@@ -384,7 +369,11 @@ export function RequestPartsPage() {
               )}
 
               <form onSubmit={checkout} style={{ marginTop: "0.75rem" }}>
-                <button type="submit" className="btn btn--primary btn--submit-wide" disabled={busy}>
+                <button
+                  type="submit"
+                  className="btn btn--primary btn--submit-wide"
+                  disabled={busy || cartItems.length === 0}
+                >
                   {busy ? "Checking out…" : "Checkout (generate pick ticket)"}
                 </button>
               </form>

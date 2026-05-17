@@ -26,6 +26,9 @@ function summarizeAuditRow(r: AuditLogEntry): string {
     const when = payload?.closed_at ?? "—";
     return `Picker ${picker} closed ticket #${payload?.id ?? r.entity_id ?? "—"} · closed at ${when}`;
   }
+  if (r.action === "pick_ticket_reopened") {
+    return `Ticket #${payload?.id ?? r.entity_id ?? "—"} reopened by ${r.actor}`;
+  }
   if (r.action === "inventory_csv_imported") {
     return `Imported inventory CSV · ${payload?.rows ?? "—"} row(s) · ${payload?.inserted ?? "—"} inserted · ${payload?.updated ?? "—"} updated`;
   }

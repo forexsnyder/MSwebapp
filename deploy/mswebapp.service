@@ -1,0 +1,19 @@
+[Unit]
+Description=MSwebapp (Express + React + SQLite)
+After=network.target
+
+[Service]
+Type=simple
+User=jeff
+Group=jeff
+WorkingDirectory=/opt/mswebapp
+Environment=NODE_ENV=production
+Environment=PORT=3001
+Environment=TRUST_PROXY=1
+Environment=DB_PATH=/var/lib/mswebapp/app.sqlite
+ExecStart=/usr/bin/node server/index.js
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

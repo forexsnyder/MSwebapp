@@ -1,125 +1,214 @@
-# Deploy to headless Ubuntu (systemd)
+# MSwebapp Ubuntu Production Setup
 
-This app is a single Node process that serves:
+Production target:
 
-- the API under `/api/*`
-- the built React UI from `client/dist/` (same origin)
+- Public URL: `https://app.mswebapp.com/`
+- GitHub repository: `https://github.com/forexsnyder/MSwebapp.git`
+- App code: `/opt/mswebapp`
+- SQLite database: `/var/lib/mswebapp/app.sqlite`
+- Linux user: `jeff`
+- Node service: `mswebapp`
+- Cloudflare tunnel: `mswebapp`
+- Internal app port: `3001`
 
-## 0) Server prerequisites
+The app is one Node process. It serves the API under `/api/*` and the built
+React UI from `client/dist/`.
 
-- Ubuntu server on your LAN
-- A DNS name or static IP (recommended)
-- Node.js 20+ installed
+## 1) Azure Redirect URI
 
-If you don't already have Node 20+ on Ubuntu, install it via your preferred method (NodeSource, nvm, etc.).
+In Microsoft Entra app registration `ddacbbb5-d415-458d-8132-761d07714425`,
+add this SPA redirect URI:
 
-## 1) Create a service user + folders
-
-```bash
-sudo useradd --system --create-home --home /srv/react-sqlite-app --shell /usr/sbin/nologin reactapp || true
-
-sudo mkdir -p /opt/react-sqlite-app
-sudo mkdir -p /var/lib/react-sqlite-app
-sudo chown -R reactapp:reactapp /var/lib/react-sqlite-app
+```text
+https://app.mswebapp.com/
 ```
 
-## 2) Copy the project onto the server
+The committed production Vite env file at `client/.env.production` uses that
+same URI. If Azure and the React build do not match exactly, login fails with
+`AADSTS50011`.
 
-Copy this repo folder to `/opt/react-sqlite-app` on the server.
+## 2) Install Server Packages
 
-Example (from your workstation):
+Ubuntu 24.04's default `nodejs` package is Node 18, but this app requires
+Node 20+. Install Node 22 from NodeSource before installing app dependencies.
 
 ```bash
-rsync -a --delete ./react-sqlite-app/ youruser@server:/opt/react-sqlite-app/
+sudo apt update
+sudo apt upgrade -y
+sudo apt install -y git curl ca-certificates gnupg build-essential sqlite3 ufw
+
+curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
+sudo apt install -y nodejs
+/usr/bin/node -v
+/usr/bin/npm -v
 ```
 
-Important: **do not copy `node_modules/`**; install fresh on the server.
+Expected major versions:
 
-## 3) Install dependencies + build UI (on the server)
-
-```bash
-cd /opt/react-sqlite-app
-
-# clean install based on package-lock.json
-npm ci
-
-# build the React app into client/dist (required for NODE_ENV=production)
-npm run build
+```text
+node v22.x
+npm 10.x
 ```
 
-## 4) Configure environment variables
+## 3) Install Cloudflared
 
-Create an env file (owned by root; readable by the service):
+Use a named Cloudflare Tunnel for production. Do not use a random
+`trycloudflare.com` quick tunnel for Microsoft auth.
 
 ```bash
-sudo mkdir -p /etc/react-sqlite-app
-sudo nano /etc/react-sqlite-app/env
+curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg | sudo tee /usr/share/keyrings/cloudflare-main.gpg >/dev/null
+echo "deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared any main" | sudo tee /etc/apt/sources.list.d/cloudflared.list
+sudo apt update
+sudo apt install -y cloudflared
 ```
 
-Suggested contents:
+Authenticate Cloudflare and create the tunnel:
 
 ```bash
-NODE_ENV=production
-PORT=3001
-TRUST_PROXY=1
-
-# Persist SQLite outside the code folder
-DB_PATH=/var/lib/react-sqlite-app/app.db
-
-# Optional: if you serve the UI from a different origin, set this.
-# If you leave it blank (recommended), the app is same-origin only in production.
-# CORS_ORIGIN=http://your-ui-host:3001
-
-# Optional: protect /api/admin/* endpoints.
-# When set, callers must send header: x-admin-token: <value>
-# ADMIN_TOKEN=change-me
-
-# Optional: request body limit for JSON posts
-JSON_LIMIT=1mb
+cloudflared tunnel login
+cloudflared tunnel create mswebapp
+cloudflared tunnel route dns mswebapp app.mswebapp.com
 ```
 
-## 5) Install the systemd unit
-
-Copy the unit file into place:
+Install the tunnel config:
 
 ```bash
-sudo cp /opt/react-sqlite-app/deploy/react-sqlite-app.service /etc/systemd/system/react-sqlite-app.service
+sudo mkdir -p /etc/cloudflared
+sudo cp /opt/mswebapp/deploy/cloudflared-mswebapp.yml /etc/cloudflared/config.yml
+sudo cloudflared service install
+sudo systemctl enable --now cloudflared
+sudo systemctl status cloudflared --no-pager
+```
+
+If `cloudflared tunnel create mswebapp` writes the credentials file somewhere
+other than `/root/.cloudflared/mswebapp.json`, update
+`/etc/cloudflared/config.yml` to the actual credentials path.
+
+## 4) Create User And Storage
+
+```bash
+sudo id jeff || sudo useradd --create-home --shell /bin/bash jeff
+
+sudo mkdir -p /var/lib/mswebapp
+sudo chown -R jeff:jeff /var/lib/mswebapp
+sudo -u jeff touch /var/lib/mswebapp/app.sqlite
+sudo chown jeff:jeff /var/lib/mswebapp/app.sqlite
+```
+
+## 5) Clone The App
+
+```bash
+sudo rm -rf /opt/mswebapp
+sudo git clone https://github.com/forexsnyder/MSwebapp.git /opt/mswebapp
+sudo chown -R jeff:jeff /opt/mswebapp
+```
+
+If the GitHub repository is private, authenticate Git first or use an SSH deploy
+key before cloning.
+
+## 6) Install Dependencies And Build
+
+```bash
+cd /opt/mswebapp
+sudo -u jeff rm -rf node_modules client/node_modules server/node_modules
+sudo -u jeff rm -f client/.env.local
+sudo -u jeff /usr/bin/npm ci
+sudo -u jeff /usr/bin/npm run build
+```
+
+## 7) Install The Systemd Service
+
+```bash
+sudo cp /opt/mswebapp/deploy/mswebapp.service /etc/systemd/system/mswebapp.service
 sudo systemctl daemon-reload
-```
-
-Enable + start:
-
-```bash
-sudo systemctl enable --now react-sqlite-app
-sudo systemctl status react-sqlite-app --no-pager
+sudo systemctl enable --now mswebapp
+sudo systemctl status mswebapp --no-pager
 ```
 
 Logs:
 
 ```bash
-journalctl -u react-sqlite-app -f
+journalctl -u mswebapp -f
 ```
 
 Health check:
 
 ```bash
-curl -s http://localhost:3001/api/health | jq .
+curl -fsS http://localhost:3001/api/health
 ```
 
-## 6) LAN firewall (optional but recommended)
+## 8) Firewall
 
-If using UFW:
+Cloudflare Tunnel does not require exposing port `3001` to the internet. Keep
+SSH open and deny direct public access to the app port unless you deliberately
+need LAN testing.
+
+```bash
+sudo ufw allow OpenSSH
+sudo ufw --force enable
+sudo ufw status
+```
+
+For temporary LAN-only testing:
 
 ```bash
 sudo ufw allow from 192.168.0.0/16 to any port 3001 proto tcp
-sudo ufw enable
 ```
 
-## 7) Backups (strongly recommended)
+## 9) Verify Production
 
-At minimum, back up:
+```bash
+curl -I https://app.mswebapp.com/
+curl -fsS https://app.mswebapp.com/api/health
+```
 
-- `/var/lib/react-sqlite-app/app.db`
+Open:
 
-SQLite is a single file; simplest backups are periodic copies with retention.
+```text
+https://app.mswebapp.com/
+```
 
+## 10) Update Production Later
+
+```bash
+cd /opt/mswebapp
+sudo -u jeff git status
+sudo -u jeff git pull --ff-only origin master
+sudo -u jeff rm -rf node_modules client/node_modules server/node_modules
+sudo -u jeff rm -f client/.env.local
+sudo -u jeff /usr/bin/npm ci
+sudo -u jeff /usr/bin/npm run build
+sudo systemctl restart mswebapp
+sudo systemctl status mswebapp --no-pager
+```
+
+## Troubleshooting
+
+If Microsoft login fails with `AADSTS50011`, confirm both places use the exact
+same URI:
+
+- Azure SPA redirect URI: `https://app.mswebapp.com/`
+- `client/.env.production`: `VITE_AZURE_REDIRECT_URI=https://app.mswebapp.com/`
+
+If `better-sqlite3` fails after changing Node versions:
+
+```bash
+cd /opt/mswebapp
+sudo -u jeff rm -rf node_modules client/node_modules server/node_modules
+sudo -u jeff rm -f client/.env.local
+sudo -u jeff /usr/bin/npm ci
+sudo systemctl restart mswebapp
+```
+
+The active database should be:
+
+```bash
+pid=$(systemctl show -p MainPID --value mswebapp)
+sudo ls -l /proc/$pid/fd | grep -E 'app\.(db|sqlite)'
+```
+
+Expected:
+
+```text
+/var/lib/mswebapp/app.sqlite
+```

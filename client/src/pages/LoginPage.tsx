@@ -1,24 +1,41 @@
-import { FormEvent, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useEffect, useRef, useState } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
+import { isMsalConfigured } from "../auth/msalConfig";
 
 export function LoginPage() {
-  const { login } = useAuth();
+  const { login, user } = useAuth();
   const navigate = useNavigate();
-  const [username, setUsername] = useState("");
-  const [password, setPassword] = useState("");
+  const location = useLocation();
+  const startedLogin = useRef(false);
   const [error, setError] = useState<string | null>(null);
 
-  function onSubmit(e: FormEvent) {
-    e.preventDefault();
-    setError(null);
-    const u = username.trim();
-    if (!u) {
-      setError("Enter a username.");
+  const from = (location.state as { from?: { pathname?: string } } | null)?.from?.pathname ?? "/";
+  const loginHint =
+    new URLSearchParams(location.search).get("login_hint") ||
+    new URLSearchParams(location.search).get("upn") ||
+    new URLSearchParams(location.search).get("username") ||
+    undefined;
+
+  useEffect(() => {
+    if (user) {
+      navigate(from, { replace: true });
       return;
     }
-    login(u);
-    navigate("/", { replace: true });
+
+    if (!isMsalConfigured || startedLogin.current) return;
+    startedLogin.current = true;
+    void login({ loginHint }).catch((err) => {
+      startedLogin.current = false;
+      setError(err instanceof Error ? err.message : "Microsoft sign-in failed.");
+    });
+  }, [from, login, loginHint, navigate, user]);
+
+  function onSignIn() {
+    setError(null);
+    void login({ loginHint }).catch((err) => {
+      setError(err instanceof Error ? err.message : "Microsoft sign-in failed.");
+    });
   }
 
   return (
@@ -26,35 +43,20 @@ export function LoginPage() {
       <div className="login-card">
         <div className="login-card__brand">
           <h1 className="login-card__title">MSI Picker</h1>
-          <p className="login-card__subtitle">CostPoint Parts Management</p>
+          <p className="login-card__subtitle">Signing in with Microsoft</p>
         </div>
-        <form className="login-form" onSubmit={onSubmit}>
+        <div className="login-form">
+          {!isMsalConfigured && (
+            <p className="banner banner--error">
+              Azure sign-in is not configured. Add the VITE_AZURE_CLIENT_ID and
+              VITE_AZURE_TENANT_ID values, then restart the dev server.
+            </p>
+          )}
           {error && <p className="banner banner--error">{error}</p>}
-          <label className="field">
-            <span className="field__label">Username</span>
-            <input
-              className="field__input field__input--login"
-              autoComplete="username"
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              placeholder="you@company.com"
-            />
-          </label>
-          <label className="field">
-            <span className="field__label">Password</span>
-            <input
-              className="field__input field__input--login"
-              type="password"
-              autoComplete="current-password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="••••••••"
-            />
-          </label>
-          <button type="submit" className="btn btn--login">
-            Login
+          <button type="button" className="btn btn--login" onClick={onSignIn}>
+            Sign in with Microsoft
           </button>
-        </form>
+        </div>
       </div>
     </div>
   );

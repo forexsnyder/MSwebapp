@@ -125,14 +125,34 @@ code,
   width: 100%;
 }
 
+.app-header__brand {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+}
+
+.app-header__logo {
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
+  border-radius: 8px;
+  background: #fff;
+  object-fit: contain;
+}
+
 .app-header__title {
   margin: 0;
   font-size: clamp(1rem, 2.8vw, 1.15rem);
   font-weight: 700;
   color: var(--color-header-text);
-  text-align: center;
-  letter-spacing: -0.02em;
+  text-align: left;
+  letter-spacing: 0;
   line-height: 1.2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .app-header__icon-btn {
@@ -446,6 +466,34 @@ code,
 
 .landing__welcome {
   margin-bottom: 1rem;
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.landing__logo {
+  width: clamp(84px, 24vw, 132px);
+  height: clamp(84px, 24vw, 132px);
+  flex: 0 0 auto;
+  border-radius: 18px;
+  object-fit: contain;
+}
+
+.landing__welcome-copy {
+  min-width: 0;
+}
+
+@media (max-width: 420px) {
+  .landing__welcome {
+    align-items: flex-start;
+    gap: 0.85rem;
+  }
+
+  .landing__logo {
+    width: 76px;
+    height: 76px;
+    border-radius: 14px;
+  }
 }
 
 .pick-column {

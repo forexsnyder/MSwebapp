@@ -30,7 +30,10 @@ export function AppHeader({ pathname, onLogout }: AppHeaderProps) {
             />
           </svg>
         </button>
-        <h1 className="app-header__title">{displayTitle}</h1>
+        <div className="app-header__brand">
+          <img className="app-header__logo" src="/brand/msi-picker-logo.png" alt="" aria-hidden="true" />
+          <h1 className="app-header__title">{displayTitle}</h1>
+        </div>
         <button type="button" className="app-header__logout" onClick={onLogout}>
           Logout
         </button>

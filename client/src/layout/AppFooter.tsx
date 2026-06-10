@@ -1,6 +1,17 @@
+import type { ReactNode } from "react";
 import { NavLink, useNavigate } from "react-router-dom";
+import { useAuth } from "../auth/AuthContext";
+import { hasAnyRole, type AppRole } from "../auth/roles";
 
-const nav = [
+type NavItem = {
+  to: string;
+  label: string;
+  end?: boolean;
+  roles?: AppRole[];
+  icon: ReactNode;
+};
+
+const nav: NavItem[] = [
   {
     to: "/",
     label: "Home",
@@ -19,6 +30,7 @@ const nav = [
   {
     to: "/request",
     label: "Request",
+    roles: ["Requester"],
     icon: (
       <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden>
         <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="2" />
@@ -29,6 +41,7 @@ const nav = [
   {
     to: "/history",
     label: "History",
+    roles: ["Requester", "Picker"],
     icon: (
       <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden>
         <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="2" />
@@ -45,6 +58,7 @@ const nav = [
   {
     to: "/pick",
     label: "Pick",
+    roles: ["Picker"],
     icon: (
       <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden>
         <path
@@ -60,6 +74,7 @@ const nav = [
   {
     to: "/audit",
     label: "Audit",
+    roles: ["Auditor"],
     icon: (
       <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden>
         <path
@@ -81,6 +96,7 @@ const nav = [
   {
     to: "/inventory",
     label: "Inventory",
+    roles: ["Auditor"],
     icon: (
       <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden>
         <path d="M4 7h16M4 12h16M4 17h10" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
@@ -92,6 +108,8 @@ const nav = [
 
 export function AppFooter() {
   const navigate = useNavigate();
+  const { roles } = useAuth();
+  const visibleNav = nav.filter((item) => !item.roles || hasAnyRole(roles, item.roles));
 
   return (
     <footer className="app-footer">
@@ -113,7 +131,7 @@ export function AppFooter() {
           </svg>
         </button>
         <nav className="app-footer__nav" aria-label="Primary">
-          {nav.map((item) => (
+          {visibleNav.map((item) => (
             <NavLink
               key={item.to}
               to={item.to}

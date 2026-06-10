@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { useAuth } from "../auth/AuthContext";
+import { hasAnyRole } from "../auth/roles";
 import type { PickTicket, PickTicketSummary, UserPickTicketHistory } from "../types";
 
 type HistoryTab = "requested" | "picked";
@@ -154,7 +155,7 @@ function HistoryTicketList({
 }
 
 export function HistoryPage() {
-  const { user } = useAuth();
+  const { user, roles } = useAuth();
   const [tab, setTab] = useState<HistoryTab>("requested");
   const [history, setHistory] = useState<UserPickTicketHistory | null>(null);
   const [loading, setLoading] = useState(true);
@@ -192,6 +193,18 @@ export function HistoryPage() {
     setExpandedId(null);
   }, [tab]);
 
+  const canViewRequested = hasAnyRole(roles, ["Requester"]);
+  const canViewPicked = hasAnyRole(roles, ["Picker"]);
+
+  useEffect(() => {
+    if (tab === "requested" && !canViewRequested && canViewPicked) {
+      setTab("picked");
+    }
+    if (tab === "picked" && !canViewPicked && canViewRequested) {
+      setTab("requested");
+    }
+  }, [canViewPicked, canViewRequested, tab]);
+
   function toggleTicket(id: number) {
     setExpandedId((cur) => (cur === id ? null : id));
   }
@@ -214,26 +227,30 @@ export function HistoryPage() {
         {error && <p className="banner banner--error">{error}</p>}
 
         <div className="inventory-tabs history-tabs" role="tablist" aria-label="History views">
-          <button
-            type="button"
-            role="tab"
-            aria-selected={tab === "requested"}
-            className={`inventory-tab${tab === "requested" ? " inventory-tab--active" : ""}`}
-            onClick={() => setTab("requested")}
-          >
-            My requests
-            {history ? ` (${history.requested.length})` : ""}
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={tab === "picked"}
-            className={`inventory-tab${tab === "picked" ? " inventory-tab--active" : ""}`}
-            onClick={() => setTab("picked")}
-          >
-            My picks
-            {history ? ` (${history.picked.length})` : ""}
-          </button>
+          {canViewRequested ? (
+            <button
+              type="button"
+              role="tab"
+              aria-selected={tab === "requested"}
+              className={`inventory-tab${tab === "requested" ? " inventory-tab--active" : ""}`}
+              onClick={() => setTab("requested")}
+            >
+              My requests
+              {history ? ` (${history.requested.length})` : ""}
+            </button>
+          ) : null}
+          {canViewPicked ? (
+            <button
+              type="button"
+              role="tab"
+              aria-selected={tab === "picked"}
+              className={`inventory-tab${tab === "picked" ? " inventory-tab--active" : ""}`}
+              onClick={() => setTab("picked")}
+            >
+              My picks
+              {history ? ` (${history.picked.length})` : ""}
+            </button>
+          ) : null}
         </div>
 
         {loading ? (

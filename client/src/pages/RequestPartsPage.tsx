@@ -212,29 +212,8 @@ export function RequestPartsPage() {
         ) : (
           <div className="stack-form">
             <section className="card">
-              <h2 className="section-title">Build your cart</h2>
+              <h2 className="section-title">Build your cart {requesterName}</h2>
               <div className="requester-build">
-                <label className="field requester-build__requester">
-                  <span className="field__label">Requester Name</span>
-                  <input
-                    className="field__input"
-                    value={requesterName}
-                    readOnly
-                    aria-readonly="true"
-                  />
-                </label>
-                <p className="muted small requester-build__requester-note">
-                  {user ? (
-                    <>
-                      Signed in as <span className="mono">{user}</span>
-                    </>
-                  ) : (
-                    <>
-                      Using test requester <span className="mono">{DUMMY_REQUESTER_NAME}</span>
-                    </>
-                  )}
-                </p>
-
                 <div className="stack-form stack-form--request">
                   <fieldset className="field request-type-field">
                     <legend className="field__label">Request type</legend>

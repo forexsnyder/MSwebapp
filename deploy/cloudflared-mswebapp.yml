@@ -1,0 +1,7 @@
+tunnel: mswebapp
+credentials-file: /root/.cloudflared/mswebapp.json
+
+ingress:
+  - hostname: app.mswebapp.com
+    service: http://localhost:3001
+  - service: http_status:404

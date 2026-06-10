@@ -1,5 +1,6 @@
 import { Navigate, Route, Routes } from "react-router-dom";
 import { RequireAuth } from "./auth/RequireAuth";
+import { RequireRole } from "./auth/RequireRole";
 import { Layout } from "./layout/Layout";
 import { InventoryAdminPage } from "./pages/InventoryAdminPage";
 import { AuditorPage } from "./pages/AuditorPage";
@@ -22,11 +23,46 @@ export default function App() {
         }
       >
         <Route index element={<LandingPage />} />
-        <Route path="request" element={<RequestPartsPage />} />
-        <Route path="pick" element={<PickOrdersPage />} />
-        <Route path="history" element={<HistoryPage />} />
-        <Route path="audit" element={<AuditorPage />} />
-        <Route path="inventory" element={<InventoryAdminPage />} />
+        <Route
+          path="request"
+          element={
+            <RequireRole roles={["Requester"]}>
+              <RequestPartsPage />
+            </RequireRole>
+          }
+        />
+        <Route
+          path="pick"
+          element={
+            <RequireRole roles={["Picker"]}>
+              <PickOrdersPage />
+            </RequireRole>
+          }
+        />
+        <Route
+          path="history"
+          element={
+            <RequireRole roles={["Requester", "Picker"]}>
+              <HistoryPage />
+            </RequireRole>
+          }
+        />
+        <Route
+          path="audit"
+          element={
+            <RequireRole roles={["Auditor"]}>
+              <AuditorPage />
+            </RequireRole>
+          }
+        />
+        <Route
+          path="inventory"
+          element={
+            <RequireRole roles={["Auditor"]}>
+              <InventoryAdminPage />
+            </RequireRole>
+          }
+        />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
     </Routes>

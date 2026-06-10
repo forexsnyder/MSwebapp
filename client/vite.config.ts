@@ -7,7 +7,7 @@ export default defineConfig({
     port: 5173,
     /** Listen on LAN — default is localhost-only, so other machines cannot open :5173. */
     host: true,
-    allowedHosts: ["app.mswebapp.com", ".trycloudflare.com"],
+    allowedHosts: ["app.msiwebapp.com", ".trycloudflare.com"],
     proxy: {
       "/api": {
         target: "http://localhost:3001",

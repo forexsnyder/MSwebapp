@@ -2,7 +2,7 @@
 
 Production target:
 
-- Public URL: `https://app.mswebapp.com/`
+- Public URL: `https://app.msiwebapp.com/`
 - GitHub repository: `https://github.com/forexsnyder/MSwebapp.git`
 - App code: `/opt/mswebapp`
 - SQLite database: `/var/lib/mswebapp/app.sqlite`
@@ -20,7 +20,7 @@ In Microsoft Entra app registration `ddacbbb5-d415-458d-8132-761d07714425`,
 add this SPA redirect URI:
 
 ```text
-https://app.mswebapp.com/
+https://app.msiwebapp.com/
 ```
 
 The committed production Vite env file at `client/.env.production` uses that
@@ -67,7 +67,7 @@ Authenticate Cloudflare and create the tunnel:
 ```bash
 cloudflared tunnel login
 cloudflared tunnel create mswebapp
-cloudflared tunnel route dns mswebapp app.mswebapp.com
+cloudflared tunnel route dns mswebapp app.msiwebapp.com
 ```
 
 Install the tunnel config:
@@ -158,14 +158,14 @@ sudo ufw allow from 192.168.0.0/16 to any port 3001 proto tcp
 ## 9) Verify Production
 
 ```bash
-curl -I https://app.mswebapp.com/
-curl -fsS https://app.mswebapp.com/api/health
+curl -I https://app.msiwebapp.com/
+curl -fsS https://app.msiwebapp.com/api/health
 ```
 
 Open:
 
 ```text
-https://app.mswebapp.com/
+https://app.msiwebapp.com/
 ```
 
 ## 10) Update Production Later
@@ -187,8 +187,8 @@ sudo systemctl status mswebapp --no-pager
 If Microsoft login fails with `AADSTS50011`, confirm both places use the exact
 same URI:
 
-- Azure SPA redirect URI: `https://app.mswebapp.com`
-- `client/.env.production`: `VITE_AZURE_REDIRECT_URI=https://app.mswebapp.com`
+- Azure SPA redirect URI: `https://app.msiwebapp.com`
+- `client/.env.production`: `VITE_AZURE_REDIRECT_URI=https://app.msiwebapp.com`
 
 If `better-sqlite3` fails after changing Node versions:
 

@@ -50,7 +50,7 @@ In Microsoft Entra admin center:
 5. Production redirect URI:
 
    ```text
-   https://app.mswebapp.com
+   https://app.msiwebapp.com
    ```
 
 6. Select **Save**.
@@ -66,7 +66,7 @@ The committed production build env is `client/.env.production`:
 ```bash
 VITE_AZURE_CLIENT_ID=ddacbbb5-d415-458d-8132-761d07714425
 VITE_AZURE_TENANT_ID=80ed6e92-fab4-44fb-93a5-f7da73b67333
-VITE_AZURE_REDIRECT_URI=https://app.mswebapp.com
+VITE_AZURE_REDIRECT_URI=https://app.msiwebapp.com
 ```
 
 For local development, create `client/.env.local` and use the same values unless
@@ -150,7 +150,7 @@ These are the values created for this development dry run.
   `917a4eda-aa59-46be-be6c-17438b0e271d`
 - Intune web link app: `MSI Picker Dev`
 - Intune web link app ID: `fb721928-e045-4051-bb59-ddb1c71c29cc`
-- Intune web link URL: `https://app.mswebapp.com/`
+- Intune web link URL: `https://app.msiwebapp.com/`
 - Intune web link assignment: available for enrolled devices, assigned to
   `MSI Picker Dev Test Users`
 - Android Enterprise profile: `MSI Android Fully Managed Dev`
@@ -427,7 +427,7 @@ Configured app:
 - Publisher: `MSI Web App`
 - App type: `WebApp`
 - App ID: `fb721928-e045-4051-bb59-ddb1c71c29cc`
-- App URL: `https://app.mswebapp.com/`
+- App URL: `https://app.msiwebapp.com/`
 - Require a managed browser: `No`
 - Featured app: `No`
 - Assignment: **Available for enrolled devices**
@@ -442,14 +442,14 @@ To recreate it:
 5. Name: `MSI Picker Dev`.
 6. Description: `Development shortcut to the MSI Picker web app.`
 7. Publisher: `MSI Web App`.
-8. App URL: `https://app.mswebapp.com/`.
+8. App URL: `https://app.msiwebapp.com/`.
 9. Require a managed browser to open this link: **No**.
 10. Assign it as **Available for enrolled devices** to
     `MSI Picker Dev Test Users`.
 11. Create the app.
 
 This is now a production shortcut. It works through the permanent Cloudflare
-Tunnel route for `app.mswebapp.com`, so it does not depend on a LAN IP or a Vite
+Tunnel route for `app.msiwebapp.com`, so it does not depend on a LAN IP or a Vite
 dev server.
 
 ## 4. Install the Microsoft Entra private network connector

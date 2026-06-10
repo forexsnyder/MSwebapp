@@ -79,9 +79,9 @@ cd /Users/jeffsnyder/Documents/MSwebapp/client
 npm run dev -- --host 0.0.0.0
 ```
 
-Production uses the named Cloudflare Tunnel in
-`deploy/README-ubuntu-systemd.md`, not a random quick tunnel. If you temporarily
-use a quick tunnel for development, update both the Entra SPA redirect URI and
+Production uses the internal DNS, internal CA, and Nginx path in
+`deploy/README-ubuntu-systemd.md`. If you temporarily use a different hostname
+for development, update both the Entra SPA redirect URI and
 `VITE_AZURE_REDIRECT_URI`, then restart Vite.
 
 When the app opens, it redirects to Microsoft sign-in automatically. If Chrome
@@ -448,9 +448,9 @@ To recreate it:
     `MSI Picker Dev Test Users`.
 11. Create the app.
 
-This is now a production shortcut. It works through the permanent Cloudflare
-Tunnel route for `app.msiwebapp.com`, so it does not depend on a LAN IP or a Vite
-dev server.
+This is now a production shortcut. It opens `app.msiwebapp.com`, which must be
+reachable through internal DNS on the LAN/VPN or through Microsoft Entra Private
+Access. It does not depend on a LAN IP or a Vite dev server.
 
 ## 4. Install the Microsoft Entra private network connector
 

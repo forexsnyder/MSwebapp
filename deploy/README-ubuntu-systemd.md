@@ -187,8 +187,8 @@ sudo systemctl status mswebapp --no-pager
 If Microsoft login fails with `AADSTS50011`, confirm both places use the exact
 same URI:
 
-- Azure SPA redirect URI: `https://app.mswebapp.com/`
-- `client/.env.production`: `VITE_AZURE_REDIRECT_URI=https://app.mswebapp.com/`
+- Azure SPA redirect URI: `https://app.mswebapp.com`
+- `client/.env.production`: `VITE_AZURE_REDIRECT_URI=https://app.mswebapp.com`
 
 If `better-sqlite3` fails after changing Node versions:
 

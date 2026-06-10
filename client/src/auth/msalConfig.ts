@@ -10,7 +10,7 @@ function getDefaultRedirectUri() {
   }
 
   if (typeof window !== "undefined") {
-    return `${window.location.origin}/`;
+    return window.location.origin;
   }
 
   return "/";

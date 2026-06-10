@@ -50,7 +50,7 @@ In Microsoft Entra admin center:
 5. Production redirect URI:
 
    ```text
-   https://app.mswebapp.com/
+   https://app.mswebapp.com
    ```
 
 6. Select **Save**.
@@ -66,7 +66,7 @@ The committed production build env is `client/.env.production`:
 ```bash
 VITE_AZURE_CLIENT_ID=ddacbbb5-d415-458d-8132-761d07714425
 VITE_AZURE_TENANT_ID=80ed6e92-fab4-44fb-93a5-f7da73b67333
-VITE_AZURE_REDIRECT_URI=https://app.mswebapp.com/
+VITE_AZURE_REDIRECT_URI=https://app.mswebapp.com
 ```
 
 For local development, create `client/.env.local` and use the same values unless

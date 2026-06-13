@@ -1,0 +1,747 @@
+MSwebapp / MSI Picker Production Build Instructions
+Plain text copy/paste version for the temporary local production test machines.
+
+Last tested: 2026-06-11
+
+Test machine values:
+
+Windows DNS/domain controller IP: 192.168.1.162
+Ubuntu app server IP: 192.168.1.165
+Network gateway: 192.168.1.1
+Ubuntu user: msi
+Ubuntu SSH password: use the local server password
+Windows user: Administrator
+Windows password: use the local administrator password
+App DNS name: app.msiwebapp.com
+App URL: https://app.msiwebapp.com/
+Ubuntu app directory: /opt/mswebapp
+SQLite database: /var/lib/mswebapp/app.sqlite
+Node app port: 3001
+Reverse proxy: nginx
+
+What I tested successfully on Ubuntu:
+
+- SSH from Mac to 192.168.1.165.
+- Static IP configuration with nmcli on connection netplan-eth0.
+- apt install of git, curl, build tools, sqlite3, ufw, nginx, openssl, nodejs,
+  and npm.
+- Node v22.22.1 and npm 9.2.0 from the Ubuntu 26.04 repositories.
+- Copying the repo from the Mac to Ubuntu with tar/scp.
+- npm ci.
+- npm run build.
+- systemd service using the msi user.
+- /api/health on localhost:3001.
+- Nginx proxy to the Node app using a temporary test certificate.
+- Mac curl test using --resolve to bypass missing DNS.
+
+What I could not fully automate from the Mac:
+
+- Windows DNS/CA commands. Windows SSH on 192.168.1.162 is not enabled.
+- WinRM port 5985 is open, but Mac PowerShell remoting failed authentication.
+- Use RDP into Windows and paste the PowerShell commands locally.
+
+
+SECTION 1 - OPEN THE SERVERS
+
+From Mac Terminal, SSH into Ubuntu:
+
+ssh msi@192.168.1.165
+
+Password:
+
+Use the local Ubuntu server password.
+
+To open Windows Server by RDP from the Mac:
+
+open "rdp://full%20address=s:192.168.1.162"
+
+Sign in as:
+
+Administrator
+
+Password:
+
+Use the local Windows administrator password.
+
+On Windows, open PowerShell as Administrator before running the Windows command
+blocks.
+
+
+SECTION 2 - OPTIONAL: ENABLE SSH ON WINDOWS SERVER
+
+Run this once from an elevated PowerShell window on Windows Server if you want
+to manage Windows from Mac Terminal with ssh later.
+
+Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0
+Start-Service sshd
+Set-Service -Name sshd -StartupType Automatic
+New-NetFirewallRule -Name sshd -DisplayName "OpenSSH Server" -Enabled True -Direction Inbound -Protocol TCP -Action Allow -LocalPort 22
+
+After that, Mac Terminal should work:
+
+ssh Administrator@192.168.1.162
+
+
+SECTION 3 - WINDOWS DNS RECORD
+
+Run this in elevated PowerShell on the Windows DNS/domain controller.
+
+$AppZone = "msiwebapp.com"
+$AppRecordName = "app"
+$AppServerIp = "192.168.1.165"
+
+if (-not (Get-DnsServerZone -Name $AppZone -ErrorAction SilentlyContinue)) {
+    Add-DnsServerPrimaryZone -Name $AppZone -ReplicationScope "Domain"
+}
+
+$ExistingRecord = Get-DnsServerResourceRecord `
+    -ZoneName $AppZone `
+    -Name $AppRecordName `
+    -RRType A `
+    -ErrorAction SilentlyContinue
+
+if ($ExistingRecord) {
+    $NewRecord = $ExistingRecord.Clone()
+    $NewRecord.RecordData.IPv4Address = [System.Net.IPAddress]::Parse($AppServerIp)
+    Set-DnsServerResourceRecord `
+        -ZoneName $AppZone `
+        -OldInputObject $ExistingRecord `
+        -NewInputObject $NewRecord
+} else {
+    Add-DnsServerResourceRecordA `
+        -ZoneName $AppZone `
+        -Name $AppRecordName `
+        -IPv4Address $AppServerIp
+}
+
+Resolve-DnsName app.msiwebapp.com -Server 192.168.1.162
+
+Expected result:
+
+app.msiwebapp.com resolves to 192.168.1.165.
+
+
+SECTION 4 - WINDOWS INTERNAL CA
+
+If the Windows domain controller already has AD Certificate Services installed
+and CertSvc is running, skip to Section 5.
+
+Check CA status:
+
+Get-Service CertSvc -ErrorAction SilentlyContinue
+
+If no CertSvc service exists, run this in elevated PowerShell:
+
+$CaCommonName = "MSIWEBAPP Internal Root CA"
+
+Install-WindowsFeature `
+    -Name ADCS-Cert-Authority,RSAT-ADCS,DNS `
+    -IncludeManagementTools
+
+Install-AdcsCertificationAuthority `
+    -CAType EnterpriseRootCA `
+    -CACommonName $CaCommonName `
+    -KeyLength 4096 `
+    -HashAlgorithmName SHA256 `
+    -ValidityPeriod Years `
+    -ValidityPeriodUnits 10 `
+    -Force
+
+Check that the CA is running:
+
+Get-Service CertSvc
+
+
+SECTION 5 - ISSUE THE APP CERTIFICATE ON WINDOWS
+
+Run this in elevated PowerShell on the Windows CA/domain controller.
+
+$DnsName = "app.msiwebapp.com"
+$OutputDir = "C:\MSwebapp-Certs"
+$PfxPath = Join-Path $OutputDir "$DnsName.pfx"
+$InfPath = Join-Path $OutputDir "$DnsName.inf"
+$ReqPath = Join-Path $OutputDir "$DnsName.req"
+$CerPath = Join-Path $OutputDir "$DnsName.cer"
+$PfxPasswordPlain = "<temporary-pfx-password>"
+$PfxPassword = ConvertTo-SecureString $PfxPasswordPlain -AsPlainText -Force
+
+New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
+
+@"
+[Version]
+Signature="`$Windows NT`$"
+
+[NewRequest]
+Subject = "CN=$DnsName"
+KeySpec = 1
+KeyLength = 2048
+Exportable = TRUE
+MachineKeySet = TRUE
+SMIME = FALSE
+PrivateKeyArchive = FALSE
+UserProtected = FALSE
+UseExistingKeySet = FALSE
+ProviderName = "Microsoft RSA SChannel Cryptographic Provider"
+ProviderType = 12
+RequestType = PKCS10
+KeyUsage = 0xa0
+
+[Extensions]
+2.5.29.17 = "{text}"
+_continue_ = "dns=$DnsName&"
+
+[RequestAttributes]
+CertificateTemplate = WebServer
+"@ | Set-Content -Path $InfPath -Encoding ascii
+
+certreq.exe -new $InfPath $ReqPath
+certreq.exe -submit -attrib "CertificateTemplate:WebServer" $ReqPath $CerPath
+certreq.exe -accept $CerPath
+
+$Certificate = Get-ChildItem Cert:\LocalMachine\My |
+    Where-Object { $_.Subject -eq "CN=$DnsName" } |
+    Sort-Object NotAfter -Descending |
+    Select-Object -First 1
+
+if (-not $Certificate) {
+    throw "Certificate was issued, but CN=$DnsName was not found in LocalMachine\My."
+}
+
+Export-PfxCertificate `
+    -Cert $Certificate `
+    -FilePath $PfxPath `
+    -Password $PfxPassword `
+    -Force
+
+Write-Host "PFX exported to $PfxPath"
+Write-Host "Temporary PFX password: $PfxPasswordPlain"
+
+
+SECTION 6 - COPY THE PFX FROM WINDOWS TO UBUNTU
+
+Run this in PowerShell on Windows Server.
+
+If scp is missing, install the Windows OpenSSH client first:
+
+Add-WindowsCapability -Online -Name OpenSSH.Client~~~~0.0.1.0
+
+Copy the PFX to Ubuntu:
+
+scp C:\MSwebapp-Certs\app.msiwebapp.com.pfx msi@192.168.1.165:/home/msi/app.msiwebapp.com.pfx
+
+When prompted for the Ubuntu password, enter:
+
+Use the local Ubuntu server password.
+
+
+SECTION 7 - CONFIGURE UBUNTU STATIC IP AND BASE PACKAGES
+
+Run this after SSH into Ubuntu as msi.
+
+sudo hostnamectl set-hostname mswebapp-prod
+
+sudo nmcli con mod "netplan-eth0" \
+  ipv4.addresses "192.168.1.165/24" \
+  ipv4.gateway "192.168.1.1" \
+  ipv4.dns "192.168.1.162 1.1.1.1" \
+  ipv4.method manual
+
+sudo nmcli con up "netplan-eth0"
+
+ip -4 addr show eth0
+ip route
+resolvectl dns eth0
+
+sudo apt update
+sudo apt install -y \
+  git \
+  curl \
+  ca-certificates \
+  gnupg \
+  build-essential \
+  sqlite3 \
+  ufw \
+  nginx \
+  openssl \
+  nodejs \
+  npm
+
+node -v
+npm -v
+nginx -v
+sqlite3 --version
+
+Expected on the tested Ubuntu 26.04 machine:
+
+node v22.22.1
+npm 9.2.0
+nginx 1.28.3
+
+
+SECTION 8 - CREATE UBUNTU APP DIRECTORIES
+
+Run this on Ubuntu.
+
+sudo mkdir -p /opt/mswebapp
+sudo mkdir -p /var/lib/mswebapp
+sudo mkdir -p /var/backups/mswebapp
+sudo mkdir -p /etc/ssl/mswebapp
+
+sudo chown -R msi:msi /opt/mswebapp
+sudo chown -R msi:msi /var/lib/mswebapp
+sudo chown -R msi:msi /var/backups/mswebapp
+
+sudo touch /var/lib/mswebapp/app.sqlite
+sudo chown msi:msi /var/lib/mswebapp/app.sqlite
+sudo chmod 660 /var/lib/mswebapp/app.sqlite
+
+sudo chown root:root /etc/ssl/mswebapp
+sudo chmod 755 /etc/ssl/mswebapp
+
+
+SECTION 9 - INSTALL THE CA CERTIFICATE ON UBUNTU
+
+Run this on Ubuntu after copying app.msiwebapp.com.pfx from Windows.
+
+cd /home/msi
+
+sudo openssl pkcs12 \
+  -in app.msiwebapp.com.pfx \
+  -clcerts \
+  -nokeys \
+  -out /etc/ssl/mswebapp/app.msiwebapp.com.crt
+
+sudo openssl pkcs12 \
+  -in app.msiwebapp.com.pfx \
+  -nocerts \
+  -nodes \
+  -out /etc/ssl/mswebapp/app.msiwebapp.com.key
+
+sudo chown root:root /etc/ssl/mswebapp/app.msiwebapp.com.crt
+sudo chown root:root /etc/ssl/mswebapp/app.msiwebapp.com.key
+sudo chmod 644 /etc/ssl/mswebapp/app.msiwebapp.com.crt
+sudo chmod 600 /etc/ssl/mswebapp/app.msiwebapp.com.key
+
+Verify certificate subject:
+
+openssl x509 -in /etc/ssl/mswebapp/app.msiwebapp.com.crt -noout -subject -issuer -dates
+
+
+SECTION 10 - TEMPORARY TEST CERTIFICATE ONLY
+
+Use this only if you have not issued the CA certificate yet and need to test
+Nginx. Replace it later with the CA-issued certificate from Section 9.
+
+sudo openssl req -x509 \
+  -nodes \
+  -days 30 \
+  -newkey rsa:2048 \
+  -keyout /etc/ssl/mswebapp/app.msiwebapp.com.key \
+  -out /etc/ssl/mswebapp/app.msiwebapp.com.crt \
+  -subj "/CN=app.msiwebapp.com" \
+  -addext "subjectAltName=DNS:app.msiwebapp.com"
+
+sudo chmod 644 /etc/ssl/mswebapp/app.msiwebapp.com.crt
+sudo chmod 600 /etc/ssl/mswebapp/app.msiwebapp.com.key
+
+
+SECTION 11 - DEPLOY APP CODE TO UBUNTU
+
+Option A was tested: copy the local Mac repo to Ubuntu.
+
+Run this from Mac Terminal:
+
+cd /Users/jeffsnyder/Documents/MSwebapp
+
+COPYFILE_DISABLE=1 tar \
+  --exclude='./node_modules' \
+  --exclude='./.git' \
+  --exclude='./client/node_modules' \
+  --exclude='./server/node_modules' \
+  --exclude='./client/dist' \
+  -czf /tmp/mswebapp-src.tgz .
+
+scp /tmp/mswebapp-src.tgz msi@192.168.1.165:/tmp/mswebapp-src.tgz
+
+Then SSH into Ubuntu and run:
+
+sudo rm -rf /opt/mswebapp
+sudo mkdir -p /opt/mswebapp
+sudo chown -R msi:msi /opt/mswebapp
+sudo -u msi tar -xzf /tmp/mswebapp-src.tgz -C /opt/mswebapp
+
+Option B: clone from GitHub on Ubuntu.
+
+This was not completed in the test because GitHub authentication was not set up
+on the Ubuntu server. If using GitHub, use a personal access token or SSH deploy
+key.
+
+HTTPS example:
+
+sudo rm -rf /opt/mswebapp
+sudo mkdir -p /opt/mswebapp
+sudo chown -R msi:msi /opt/mswebapp
+sudo -u msi git clone https://github.com/forexsnyder/MSwebapp.git /opt/mswebapp
+
+If GitHub asks for a username, use:
+
+forexsnyder
+
+If GitHub asks for a password, use a GitHub personal access token, not the
+GitHub account password.
+
+
+SECTION 12 - BUILD THE APP ON UBUNTU
+
+Run this on Ubuntu.
+
+cd /opt/mswebapp
+
+sudo -u msi rm -rf node_modules client/node_modules server/node_modules client/dist
+sudo -u msi rm -f client/.env.local
+
+sudo -u msi /usr/bin/npm ci
+sudo -u msi /usr/bin/npm run build
+
+ls -la client/dist
+
+Expected result:
+
+client/dist/index.html exists.
+
+Note:
+
+npm reported two critical audit findings during the test. They did not block
+the production build. Handle npm audit separately after deployment.
+
+
+SECTION 13 - INSTALL AND START THE SYSTEMD SERVICE
+
+The repo service file uses the old user jeff. This temporary Ubuntu server uses
+user msi, so patch the service file before installing it.
+
+Run this on Ubuntu.
+
+cd /opt/mswebapp
+
+cp deploy/mswebapp.service /tmp/mswebapp.service
+sed -i "s/^User=jeff$/User=msi/; s/^Group=jeff$/Group=msi/" /tmp/mswebapp.service
+
+sudo install -m 0644 /tmp/mswebapp.service /etc/systemd/system/mswebapp.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now mswebapp
+
+sleep 2
+sudo systemctl status mswebapp --no-pager
+curl -fsS http://localhost:3001/api/health
+
+Expected health response:
+
+{"ok":true,"env":"production","hasClientBuild":true,...}
+
+
+SECTION 14 - INSTALL NGINX CONFIG
+
+Run this on Ubuntu after the certificate files exist.
+
+sudo cp /opt/mswebapp/deploy/nginx-mswebapp.conf /etc/nginx/sites-available/mswebapp
+sudo ln -sfn /etc/nginx/sites-available/mswebapp /etc/nginx/sites-enabled/mswebapp
+sudo rm -f /etc/nginx/sites-enabled/default
+
+sudo nginx -t
+sudo systemctl enable nginx
+sudo systemctl reload nginx
+
+curl -kfsS https://localhost/api/health
+
+Expected result:
+
+{"ok":true,"env":"production","hasClientBuild":true,...}
+
+Note:
+
+Nginx may warn that "listen ... http2" is deprecated. In the test, this was a
+warning only and nginx -t still succeeded.
+
+
+SECTION 15 - UBUNTU FIREWALL
+
+Run this on Ubuntu.
+
+sudo ufw allow OpenSSH
+sudo ufw allow 'Nginx Full'
+sudo ufw --force enable
+sudo ufw status verbose
+
+Do not allow port 3001 through the firewall. Nginx listens on 80/443 and proxies
+to Node locally.
+
+
+SECTION 16 - VERIFY FROM MAC BEFORE DNS IS WORKING
+
+Run this from Mac Terminal. This bypasses DNS and forces app.msiwebapp.com to
+192.168.1.165 for the curl test.
+
+curl -kfsS --resolve app.msiwebapp.com:443:192.168.1.165 https://app.msiwebapp.com/api/health
+
+curl -kI --resolve app.msiwebapp.com:443:192.168.1.165 https://app.msiwebapp.com/
+
+Expected:
+
+HTTP/2 200
+
+
+SECTION 17 - VERIFY DNS AFTER WINDOWS DNS RECORD IS CREATED
+
+Run this from Mac Terminal:
+
+dig @192.168.1.162 app.msiwebapp.com +short
+
+Expected:
+
+192.168.1.165
+
+Run this from Windows PowerShell:
+
+Resolve-DnsName app.msiwebapp.com -Server 192.168.1.162
+
+Expected:
+
+app.msiwebapp.com resolves to 192.168.1.165.
+
+Run this from Ubuntu:
+
+getent hosts app.msiwebapp.com
+
+Expected:
+
+192.168.1.165 app.msiwebapp.com
+
+
+SECTION 18 - VERIFY THE APP IN A BROWSER
+
+Open:
+
+https://app.msiwebapp.com/
+
+Expected:
+
+1. Browser reaches Nginx on Ubuntu.
+2. Nginx serves the React app.
+3. Microsoft sign-in starts.
+4. Microsoft Authenticator/MFA completes.
+5. Browser returns to https://app.msiwebapp.com.
+
+If DNS is not finished yet, add a temporary hosts entry on the test workstation:
+
+192.168.1.165 app.msiwebapp.com
+
+
+SECTION 19 - MICROSOFT ENTRA APP REGISTRATION
+
+In Microsoft Entra admin center:
+
+1. Go to Identity > Applications > App registrations.
+2. Open the MSwebapp registration with client ID:
+
+ba6e29e9-fa87-4624-8cec-f60d4a414584
+
+3. Go to Authentication.
+4. Confirm platform is Single-page application.
+5. Confirm redirect URI:
+
+https://app.msiwebapp.com
+
+6. Leave implicit grant unchecked.
+
+The production build file should contain:
+
+VITE_AZURE_CLIENT_ID=ba6e29e9-fa87-4624-8cec-f60d4a414584
+VITE_AZURE_AUTHORITY_HOST=https://login.microsoftonline.us
+VITE_AZURE_TENANT_ID=missionsupport.us
+VITE_AZURE_REDIRECT_URI=https://app.msiwebapp.com
+
+On Ubuntu, verify:
+
+sed -n '1,20p' /opt/mswebapp/client/.env.production
+
+If Microsoft login fails with AADSTS50011, the Entra redirect URI and the React
+build redirect URI do not match.
+
+
+SECTION 20 - MICROSOFT ENTRA APP ROLES
+
+The app expects these app role values in the token:
+
+Requester
+Picker
+Auditor
+
+In the app registration:
+
+1. Go to App roles.
+2. Create user/group roles with exact values:
+
+Display name: Requester
+Value: Requester
+
+Display name: Picker
+Value: Picker
+
+Display name: Auditor
+Value: Auditor
+
+3. Go to Enterprise applications.
+4. Open the service principal for the MSwebapp app.
+5. Go to Users and groups.
+6. Assign users or groups to one of the app roles.
+7. Have users sign out and sign back in after role changes.
+
+
+SECTION 21 - INTUNE ANDROID COMMAND/PORTAL CHECKLIST
+
+These steps are mostly portal actions. Keep the object names exact.
+
+Required licenses:
+
+Microsoft Intune Plan 1 or suite license
+Microsoft Entra ID P1/P2 for Conditional Access and Application Proxy
+
+Recommended groups:
+
+MSI Picker Prod Users
+MSI Picker Requesters
+MSI Picker Pickers
+MSI Picker Auditors
+
+Android enrollment:
+
+1. Intune admin center > Devices > Enrollment > Android.
+2. Connect Managed Google Play.
+3. Enable Android Enterprise personally owned devices with work profile for
+   BYOD/no-factory-reset devices.
+4. Assign enrollment to MSI Picker Prod Users.
+
+Compliance policy:
+
+Platform: Android Enterprise
+Profile type: Personally-owned work profile
+Rooted devices: Block
+Google Play Services: Require
+Up-to-date security provider: Require
+Encryption: Require
+Password to unlock: Require
+Assignment: MSI Picker Prod Users
+
+Managed browser:
+
+Assign Google Chrome or Microsoft Edge from Managed Google Play to
+MSI Picker Prod Users.
+
+Web link app:
+
+Name: MSI Picker
+Publisher: MSI Web App
+App URL: https://app.msiwebapp.com/
+Assignment: MSI Picker Prod Users
+
+Conditional Access:
+
+Policy name: CA - MSI Picker Prod - compliant Android only
+Users: include MSI Picker Prod Users
+Exclude: break-glass admin accounts
+Target resource: MSI Picker Enterprise Application
+Device platform: Android
+Client apps: Browser
+Grant: Require device to be marked as compliant
+Start in Report-only
+Turn On after sign-in logs prove it behaves correctly
+
+
+SECTION 22 - BACKUP SQLITE DATABASE
+
+Run this on Ubuntu.
+
+sudo mkdir -p /var/backups/mswebapp
+sudo chown msi:msi /var/backups/mswebapp
+
+sqlite3 /var/lib/mswebapp/app.sqlite ".backup '/var/backups/mswebapp/app-$(date +%F-%H%M%S).sqlite'"
+
+ls -lh /var/backups/mswebapp
+
+Optional daily cron backup:
+
+sudo tee /etc/cron.d/mswebapp-backup >/dev/null <<'EOF'
+15 2 * * * msi sqlite3 /var/lib/mswebapp/app.sqlite ".backup '/var/backups/mswebapp/app-$(date +\%F-\%H\%M\%S).sqlite'"
+EOF
+
+
+SECTION 23 - UPDATE APP LATER
+
+If deploying by copying from Mac, repeat Section 11 Option A, then run:
+
+cd /opt/mswebapp
+
+sudo -u msi rm -rf node_modules client/node_modules server/node_modules client/dist
+sudo -u msi rm -f client/.env.local
+sudo -u msi /usr/bin/npm ci
+sudo -u msi /usr/bin/npm run build
+
+sudo systemctl restart mswebapp
+sudo nginx -t
+sudo systemctl reload nginx
+
+curl -fsS http://localhost:3001/api/health
+curl -kfsS https://localhost/api/health
+
+If deploying by GitHub, run:
+
+cd /opt/mswebapp
+sudo -u msi git pull --ff-only origin master
+
+Then run the same build/restart commands above.
+
+
+SECTION 24 - QUICK TROUBLESHOOTING
+
+DNS still fails:
+
+dig @192.168.1.162 app.msiwebapp.com +short
+
+If blank or NXDOMAIN, rerun Section 3 on Windows DNS.
+
+Nginx fails:
+
+sudo nginx -t
+sudo journalctl -u nginx -n 100 --no-pager
+
+Node service fails:
+
+sudo systemctl status mswebapp --no-pager
+sudo journalctl -u mswebapp -n 100 --no-pager
+
+App health fails on Node:
+
+curl -fsS http://localhost:3001/api/health
+
+App health works on Node but fails through Nginx:
+
+curl -kfsS https://localhost/api/health
+sudo nginx -t
+
+Certificate warning:
+
+The client does not trust the internal CA root, or the Nginx cert is still the
+temporary self-signed test cert.
+
+GitHub clone fails:
+
+Use the Mac tar/scp deployment path, or configure a GitHub personal access token
+or SSH deploy key on Ubuntu.
+
+Microsoft login AADSTS50011:
+
+Confirm both values are exactly https://app.msiwebapp.com:
+
+1. Entra app registration SPA redirect URI.
+2. /opt/mswebapp/client/.env.production VITE_AZURE_REDIRECT_URI.

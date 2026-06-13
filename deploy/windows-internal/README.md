@@ -51,6 +51,11 @@ Verify DNS:
 Resolve-DnsName app.msiwebapp.com
 ```
 
+On the live Windows Server 2025 build, AD CS succeeded when Windows selected the
+default crypto provider. If a command using
+`RSA#Microsoft Software Key Storage Provider` fails with
+`ERROR_INVALID_PARAMETER`, rerun CA setup without `-CryptoProviderName`.
+
 ## 3) Issue The App Certificate
 
 Run:

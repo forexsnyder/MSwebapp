@@ -297,3 +297,81 @@ That test profile is a lab workaround only. It is not the production fix.
 
 When those pieces are in place, the app should load privately, redirect to
 Microsoft Entra, and return to the internal app URL without Cloudflare.
+
+## Windows Server 2025 Internal DC/CA Build
+
+Built and verified on the Windows Server 2025 VM at:
+
+```text
+Host: MSI-DC01
+IP: 192.168.1.162
+AD domain: corp.msiwebapp.com
+NetBIOS: MSIWEBAPP
+Logged-in admin context: msiwebapp\administrator
+```
+
+Completed:
+
+1. Set the server to static IPv4 `192.168.1.162/24` with gateway
+   `192.168.1.1`.
+2. Renamed the server to `MSI-DC01`.
+3. Installed `AD-Domain-Services` and `DNS`.
+4. Promoted the server to the first domain controller for
+   `corp.msiwebapp.com`.
+5. Reconnected after the AD DS reboot.
+6. Verified the domain with `Get-ADDomain`.
+7. Installed `ADCS-Cert-Authority` and `RSAT-ADCS`.
+8. Configured the Enterprise Root CA.
+9. Verified `CertSvc` is running.
+
+Successful CA setup command:
+
+```powershell
+Install-AdcsCertificationAuthority `
+  -CAType EnterpriseRootCA `
+  -CACommonName "MSIWEBAPP Internal Root CA" `
+  -KeyLength 4096 `
+  -HashAlgorithmName SHA256 `
+  -ValidityPeriod Years `
+  -ValidityPeriodUnits 10 `
+  -Force
+```
+
+The Server 2025 build rejected this provider string:
+
+```powershell
+-CryptoProviderName "RSA#Microsoft Software Key Storage Provider"
+```
+
+The corrected command above lets Windows choose the provider and completed with
+`ErrorId 0`.
+
+Observed warnings:
+
+- AD DS promotion warned that IPv6 was not statically assigned. IPv4 was static
+  and the promotion completed successfully.
+- AD DS promotion warned that DNS delegation could not be created for
+  `corp.msiwebapp.com`. That is expected for this internal-only root domain.
+
+RDP/input notes:
+
+- macOS Windows App was used for RDP.
+- After AD DS promotion, reconnect to `192.168.1.162` and accept the RDP
+  certificate warning.
+- Saved credentials may need to be domain-qualified after promotion:
+  `MSIWEBAPP\Administrator`.
+- The RDP keyboard path mapped some PowerShell special characters incorrectly
+  during typed commands. Avoid `$false` and inline `Read-Host` expressions when
+  driving commands over this RDP path. Let `Install-ADDSForest` prompt for
+  `SafeModeAdministratorPassword` directly instead.
+
+Next live build step:
+
+1. Build the Ubuntu app server.
+2. Install the GitHub webapp repo.
+3. Give Ubuntu a static LAN IP.
+4. Add the internal DNS zone `msiwebapp.com` and A record
+   `app.msiwebapp.com -> <Ubuntu LAN IP>` on `MSI-DC01`.
+5. Issue the `app.msiwebapp.com` certificate from the Enterprise Root CA.
+6. Install the CA-issued certificate on Ubuntu/Nginx.
+7. Test `https://app.msiwebapp.com/` from a normal browser using internal DNS.

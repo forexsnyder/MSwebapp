@@ -3,12 +3,13 @@ import { createRoot } from "react-dom/client";
 import { PublicClientApplication } from "@azure/msal-browser";
 import { MsalProvider } from "@azure/msal-react";
 import { BrowserRouter } from "react-router-dom";
-import { AuthProvider } from "./auth/AuthContext";
+import { AuthProvider, isDevAuthBypass } from "./auth/AuthContext";
 import { isSecureAuthContext, msalConfig } from "./auth/msalConfig";
 import App from "./App.tsx";
 import "./index.css";
 
-const msalInstance = isSecureAuthContext ? new PublicClientApplication(msalConfig) : null;
+const shouldUseMsal = !isDevAuthBypass && isSecureAuthContext;
+const msalInstance = shouldUseMsal ? new PublicClientApplication(msalConfig) : null;
 const root = createRoot(document.getElementById("root")!);
 
 function InsecureAuthContextMessage() {
@@ -29,16 +30,20 @@ function InsecureAuthContextMessage() {
 }
 
 function renderApp() {
+  const app = (
+    <BrowserRouter>
+      <AuthProvider>
+        <App />
+      </AuthProvider>
+    </BrowserRouter>
+  );
+
   root.render(
     <StrictMode>
-      {isSecureAuthContext ? (
-        <MsalProvider instance={msalInstance!}>
-          <BrowserRouter>
-            <AuthProvider>
-              <App />
-            </AuthProvider>
-          </BrowserRouter>
-        </MsalProvider>
+      {isDevAuthBypass ? (
+        app
+      ) : isSecureAuthContext ? (
+        <MsalProvider instance={msalInstance!}>{app}</MsalProvider>
       ) : (
         <InsecureAuthContextMessage />
       )}

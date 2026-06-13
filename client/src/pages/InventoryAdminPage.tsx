@@ -60,6 +60,10 @@ export function InventoryAdminPage() {
                       </span>
                     </div>
                     <div className="inventory-row-card__kv">
+                      <strong>Item description</strong>
+                      <span>{p.item_description || "No item description"}</span>
+                    </div>
+                    <div className="inventory-row-card__kv">
                       <strong>Component</strong>
                       <span className="mono">
                         {p.component_part_id} rev {p.component_part_revision_id}

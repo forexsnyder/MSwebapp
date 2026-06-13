@@ -19,6 +19,22 @@ type AuthContextValue = {
 };
 
 const AuthContext = createContext<AuthContextValue | null>(null);
+const devAuthRolesFallback: AppRole[] = ["Requester", "Picker", "Auditor"];
+
+export const isDevAuthBypass =
+  import.meta.env.DEV && import.meta.env.VITE_DEV_AUTH_BYPASS === "true";
+
+function getDevAuthRoles() {
+  const rawRoles = import.meta.env.VITE_DEV_AUTH_ROLES?.trim();
+  if (!rawRoles) return devAuthRolesFallback;
+
+  const roles = rawRoles
+    .split(",")
+    .map((role) => role.trim())
+    .filter(isAppRole);
+
+  return roles.length ? roles : devAuthRolesFallback;
+}
 
 function getClaim(claims: AccountInfo["idTokenClaims"] | undefined, key: string) {
   const value = claims?.[key];
@@ -41,7 +57,22 @@ function getAccountRoles(account: AccountInfo | null) {
   return roles.filter(isAppRole);
 }
 
-export function AuthProvider({ children }: { children: ReactNode }) {
+function DevAuthProvider({ children }: { children: ReactNode }) {
+  const user = import.meta.env.VITE_DEV_AUTH_USER?.trim() || "MSI Dev User";
+  const roles = getDevAuthRoles();
+
+  const login = useCallback(async () => undefined, []);
+  const logout = useCallback(() => undefined, []);
+
+  const value = useMemo(
+    () => ({ user, roles, isLoading: false, login, logout }),
+    [user, roles, login, logout],
+  );
+
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+}
+
+function MsalAuthProvider({ children }: { children: ReactNode }) {
   const { instance, accounts, inProgress } = useMsal();
   const activeAccount = instance.getActiveAccount() ?? accounts[0] ?? null;
 
@@ -75,6 +106,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+}
+
+export function AuthProvider({ children }: { children: ReactNode }) {
+  if (isDevAuthBypass) {
+    return <DevAuthProvider>{children}</DevAuthProvider>;
+  }
+
+  return <MsalAuthProvider>{children}</MsalAuthProvider>;
 }
 
 export function useAuth() {

@@ -32,6 +32,7 @@ db.exec(`
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     part_id TEXT NOT NULL,
     part_revision_id TEXT NOT NULL,
+    item_description TEXT NOT NULL DEFAULT '',
     on_hand_quantity INTEGER NOT NULL CHECK (on_hand_quantity >= 0),
     inventory_abbreviation_code TEXT NOT NULL,
     default_inventory_location_id TEXT NOT NULL,
@@ -83,6 +84,14 @@ function migrate() {
   const invCols = tableColumns("inventory_parts");
   if (invCols.length > 0 && !invCols.includes("updated_at")) {
     db.exec(`ALTER TABLE inventory_parts ADD COLUMN updated_at TEXT NOT NULL DEFAULT (datetime('now'))`);
+  }
+  if (invCols.length > 0 && !invCols.includes("item_description")) {
+    db.exec(`ALTER TABLE inventory_parts ADD COLUMN item_description TEXT NOT NULL DEFAULT ''`);
+    db.exec(
+      `UPDATE inventory_parts
+       SET item_description = 'Item description for ' || part_id
+       WHERE trim(item_description) = ''`,
+    );
   }
   // Ensure MO status descriptions contain "In Shop" (requested business rule).
   if (invCols.length > 0 && invCols.includes("mo_status_code_description")) {
@@ -167,6 +176,7 @@ const seed = db.prepare(`
   INSERT INTO inventory_parts (
     part_id,
     part_revision_id,
+    item_description,
     on_hand_quantity,
     inventory_abbreviation_code,
     default_inventory_location_id,
@@ -178,7 +188,7 @@ const seed = db.prepare(`
     mo_status_code_description,
     lot_number,
     updated_at
-  ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))
+  ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))
 `);
 
 function sha256Hex(text) {
@@ -240,6 +250,7 @@ function seedIfEmpty() {
     {
       part_id: "test_part_001",
       part_revision_id: "test_rev_A",
+      item_description: "Demo hydraulic actuator assembly",
       on_hand_quantity: 42,
       inventory_abbreviation_code: "test_inv_MAIN",
       default_inventory_location_id: "test_loc_A1",
@@ -254,6 +265,7 @@ function seedIfEmpty() {
     {
       part_id: "test_part_002",
       part_revision_id: "test_rev_B",
+      item_description: "Demo avionics mounting bracket",
       on_hand_quantity: 7,
       inventory_abbreviation_code: "test_inv_MAIN",
       default_inventory_location_id: "test_loc_B2",
@@ -268,6 +280,7 @@ function seedIfEmpty() {
     {
       part_id: "test_part_003",
       part_revision_id: "test_rev_C",
+      item_description: "Demo power distribution cable",
       on_hand_quantity: 0,
       inventory_abbreviation_code: "test_inv_SEC",
       default_inventory_location_id: "test_loc_C3",
@@ -282,6 +295,7 @@ function seedIfEmpty() {
     {
       part_id: "test_part_004",
       part_revision_id: "test_rev_D",
+      item_description: "Demo fastener kit",
       on_hand_quantity: 128,
       inventory_abbreviation_code: "test_inv_MAIN",
       default_inventory_location_id: "test_loc_D4",
@@ -296,6 +310,7 @@ function seedIfEmpty() {
     {
       part_id: "test_part_005",
       part_revision_id: "test_rev_E",
+      item_description: "Demo QA inspection panel",
       on_hand_quantity: 19,
       inventory_abbreviation_code: "test_inv_QA",
       default_inventory_location_id: "test_loc_E5",
@@ -313,6 +328,7 @@ function seedIfEmpty() {
     seed.run(
       r.part_id,
       r.part_revision_id,
+      r.item_description,
       r.on_hand_quantity,
       r.inventory_abbreviation_code,
       r.default_inventory_location_id,
@@ -336,6 +352,7 @@ export function listParts() {
          id,
          part_id,
          part_revision_id,
+         item_description,
          on_hand_quantity,
          inventory_abbreviation_code,
          default_inventory_location_id,
@@ -483,6 +500,7 @@ export function listPickTickets({ includeCancelled = false, status, q } = {}) {
             lower(trim(sp.manufacturing_order_id)) LIKE ?
             OR lower(trim(sp.component_part_id)) LIKE ?
             OR lower(trim(sp.part_id)) LIKE ?
+            OR lower(trim(coalesce(sp.item_description, ''))) LIKE ?
             OR lower(trim(coalesce(sl.lot_number, ''))) LIKE ?
             OR lower(trim(coalesce(sp.lot_number, ''))) LIKE ?
           )
@@ -490,6 +508,7 @@ export function listPickTickets({ includeCancelled = false, status, q } = {}) {
       ${idDigits ? `OR cast(t.id AS TEXT) LIKE ?` : ""}
     )`);
     params.push(
+      pattern,
       pattern,
       pattern,
       pattern,
@@ -565,6 +584,7 @@ export function getPickTicket(id) {
          l.lot_number,
          p.part_id,
          p.part_revision_id,
+         p.item_description,
          p.on_hand_quantity,
          p.inventory_abbreviation_code,
          p.default_inventory_location_id,
@@ -946,6 +966,7 @@ export function exportInventoryCsv() {
   const headers = [
     "part_id",
     "part_revision_id",
+    "item_description",
     "on_hand_quantity",
     "inventory_abbreviation_code",
     "default_inventory_location_id",
@@ -964,6 +985,7 @@ export function exportInventoryCsv() {
       [
         csvEscape(r.part_id),
         csvEscape(r.part_revision_id),
+        csvEscape(r.item_description),
         r.on_hand_quantity,
         csvEscape(r.inventory_abbreviation_code),
         csvEscape(r.default_inventory_location_id),
@@ -1006,13 +1028,14 @@ export function importInventoryCsv({ actor, csvText }) {
 
   const upsert = db.prepare(
     `INSERT INTO inventory_parts (
-       part_id, part_revision_id, on_hand_quantity, inventory_abbreviation_code,
+       part_id, part_revision_id, item_description, on_hand_quantity, inventory_abbreviation_code,
        default_inventory_location_id, manufacturing_order_id, component_order_id,
        component_part_id, component_part_revision_id, to_issue_quantity, mo_status_code_description, updated_at
-     ) VALUES (?,?,?,?,?,?,?,?,?,?,?,datetime('now'))
+     ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))
      ON CONFLICT(part_id, part_revision_id, manufacturing_order_id, component_order_id, component_part_id, component_part_revision_id, mo_status_code_description)
      DO UPDATE SET
        on_hand_quantity = excluded.on_hand_quantity,
+       item_description = excluded.item_description,
        inventory_abbreviation_code = excluded.inventory_abbreviation_code,
        default_inventory_location_id = excluded.default_inventory_location_id,
        to_issue_quantity = excluded.to_issue_quantity,
@@ -1020,7 +1043,7 @@ export function importInventoryCsv({ actor, csvText }) {
   );
 
   const getExisting = db.prepare(
-    `SELECT id, on_hand_quantity, inventory_abbreviation_code, default_inventory_location_id, to_issue_quantity, updated_at
+    `SELECT id, item_description, on_hand_quantity, inventory_abbreviation_code, default_inventory_location_id, to_issue_quantity, updated_at
      FROM inventory_parts
      WHERE part_id = ? AND part_revision_id = ? AND manufacturing_order_id = ? AND component_order_id = ?
        AND component_part_id = ? AND component_part_revision_id = ? AND mo_status_code_description = ?`,
@@ -1033,6 +1056,11 @@ export function importInventoryCsv({ actor, csvText }) {
       const row = rows[r];
       const part_id = String(row[idx("part_id")] ?? "").trim();
       const part_revision_id = String(row[idx("part_revision_id")] ?? "").trim();
+      const itemDescriptionIdx = idx("item_description");
+      const item_description =
+        itemDescriptionIdx === -1
+          ? `Item description for ${part_id}`
+          : String(row[itemDescriptionIdx] ?? "").trim();
       const on_hand_quantity = Number(String(row[idx("on_hand_quantity")] ?? "").trim());
       const inventory_abbreviation_code = String(row[idx("inventory_abbreviation_code")] ?? "").trim();
       const default_inventory_location_id = String(row[idx("default_inventory_location_id")] ?? "").trim();
@@ -1075,6 +1103,7 @@ export function importInventoryCsv({ actor, csvText }) {
       upsert.run(
         part_id,
         part_revision_id,
+        item_description,
         on_hand_quantity,
         inventory_abbreviation_code,
         default_inventory_location_id,

@@ -439,9 +439,9 @@ export function AuditorPage() {
             <details style={{ marginTop: "0.75rem" }}>
               <summary className="muted small">Expected CSV columns</summary>
               <p className="muted small" style={{ marginTop: "0.5rem" }}>
-                part_id, part_revision_id, on_hand_quantity, inventory_abbreviation_code, default_inventory_location_id,
-                manufacturing_order_id, component_order_id, component_part_id, component_part_revision_id, to_issue_quantity,
-                mo_status_code_description
+                part_id, part_revision_id, item_description, on_hand_quantity, inventory_abbreviation_code,
+                default_inventory_location_id, manufacturing_order_id, component_order_id, component_part_id,
+                component_part_revision_id, to_issue_quantity, mo_status_code_description
               </p>
             </details>
           </section>

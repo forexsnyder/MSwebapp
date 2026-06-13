@@ -24,6 +24,7 @@ export function RequestPartsPage() {
   const [cart, setCart] = useState<Record<number, number>>({});
   const [createdTicketId, setCreatedTicketId] = useState<number | null>(null);
   const [requestType, setRequestType] = useState<RequestType>("issue");
+  const [selectedInventoryPartId, setSelectedInventoryPartId] = useState("");
   const [selectedMoId, setSelectedMoId] = useState("");
   const [selectedComponentPartId, setSelectedComponentPartId] = useState("");
   const [qtyDraft, setQtyDraft] = useState("1");
@@ -82,6 +83,32 @@ export function RequestPartsPage() {
       .map((mo) => ({ value: mo, label: mo }));
   }, [parts]);
 
+  const partSearchOptions = useMemo(() => {
+    return parts
+      .slice()
+      .sort((a, b) => {
+        const aLabel = `${a.part_id} ${a.item_description}`;
+        const bLabel = `${b.part_id} ${b.item_description}`;
+        return aLabel.localeCompare(bLabel);
+      })
+      .map((p) => {
+        const description = p.item_description?.trim() || "No item description";
+        return {
+          value: String(p.id),
+          label: `${p.part_id} - ${description}`,
+          meta: `MO ${p.manufacturing_order_id} · component ${p.component_part_id} · rev ${p.part_revision_id}`,
+          searchText: [
+            p.part_id,
+            p.part_revision_id,
+            p.item_description,
+            p.manufacturing_order_id,
+            p.component_part_id,
+            p.component_part_revision_id,
+          ].join(" "),
+        };
+      });
+  }, [parts]);
+
   const partsForMo = useMemo(() => {
     if (!selectedMoId) return [];
     return parts.filter((p) => p.manufacturing_order_id === selectedMoId);
@@ -94,6 +121,9 @@ export function RequestPartsPage() {
   }, [partsForMo]);
 
   const selectedPart = useMemo(() => {
+    if (selectedInventoryPartId) {
+      return parts.find((p) => String(p.id) === selectedInventoryPartId) ?? null;
+    }
     if (!selectedMoId || !selectedComponentPartId) return null;
     const matches = parts
       .filter(
@@ -103,17 +133,31 @@ export function RequestPartsPage() {
       .slice()
       .sort((a, b) => (a.part_id + a.part_revision_id).localeCompare(b.part_id + b.part_revision_id));
     return matches[0] ?? null;
-  }, [parts, selectedComponentPartId, selectedMoId]);
+  }, [parts, selectedComponentPartId, selectedInventoryPartId, selectedMoId]);
 
   const selectedPartInShop = useMemo(() => {
     if (!selectedPart) return false;
     return selectedPart.mo_status_code_description.includes("In Shop");
   }, [selectedPart]);
 
-  useEffect(() => {
-    // When MO changes, reset dependent selection/search.
+  function selectInventoryPart(value: string) {
+    setSelectedInventoryPartId(value);
+    const part = parts.find((p) => String(p.id) === value);
+    if (!part) return;
+    setSelectedMoId(part.manufacturing_order_id);
+    setSelectedComponentPartId(part.component_part_id);
+  }
+
+  function selectMo(value: string) {
+    setSelectedMoId(value);
     setSelectedComponentPartId("");
-  }, [selectedMoId]);
+    setSelectedInventoryPartId("");
+  }
+
+  function selectComponentPart(value: string) {
+    setSelectedComponentPartId(value);
+    setSelectedInventoryPartId("");
+  }
 
   function addSelectedToCart() {
     setError(null);
@@ -141,6 +185,7 @@ export function RequestPartsPage() {
     }
     setCart((prev) => ({ ...prev, [selectedPart.id]: q }));
     setQtyDraft("1");
+    setSelectedInventoryPartId("");
     setSelectedComponentPartId("");
   }
 
@@ -235,12 +280,21 @@ export function RequestPartsPage() {
                   </fieldset>
 
                   <SearchableSelect
+                    label="Part ID or Item Description"
+                    value={selectedInventoryPartId}
+                    options={partSearchOptions}
+                    placeholder="Search part ID or description…"
+                    searchPlaceholder="Type part ID or item description…"
+                    onChange={selectInventoryPart}
+                  />
+
+                  <SearchableSelect
                     label="Manufacturing Order ID"
                     value={selectedMoId}
                     options={moOptions}
                     placeholder="Select MO…"
                     searchPlaceholder="Search MO IDs…"
-                    onChange={(v) => setSelectedMoId(v)}
+                    onChange={selectMo}
                   />
 
                   <SearchableSelect
@@ -250,7 +304,7 @@ export function RequestPartsPage() {
                     placeholder={selectedMoId ? "Select component part…" : "Select MO first"}
                     searchPlaceholder="Search Component Part IDs…"
                     disabled={!selectedMoId}
-                    onChange={(v) => setSelectedComponentPartId(v)}
+                    onChange={selectComponentPart}
                   />
 
                   <label className="field">
@@ -278,7 +332,9 @@ export function RequestPartsPage() {
 
               {selectedPart && (
                 <p className="muted small" style={{ marginTop: "0.5rem" }}>
-                  Selected: MO <span className="mono">{selectedPart.manufacturing_order_id}</span> · component{" "}
+                  Selected: part <span className="mono">{selectedPart.part_id}</span> ·{" "}
+                  {selectedPart.item_description || "No item description"} · MO{" "}
+                  <span className="mono">{selectedPart.manufacturing_order_id}</span> · component{" "}
                   <span className="mono">{selectedPart.component_part_id}</span> · to-issue{" "}
                   <strong>{selectedPart.to_issue_quantity}</strong> · MO status{" "}
                   <span className="mono">{selectedPart.mo_status_code_description}</span>
@@ -303,6 +359,7 @@ export function RequestPartsPage() {
                           <thead>
                             <tr>
                               <th>Component Part</th>
+                              <th>Part</th>
                               <th>Requested qty</th>
                               <th>To-issue qty</th>
                               <th>On hand</th>
@@ -313,6 +370,11 @@ export function RequestPartsPage() {
                             {rows.map(({ part, requested_quantity }) => (
                               <tr key={part.id}>
                                 <td className="mono">{part.component_part_id}</td>
+                                <td>
+                                  <span className="mono">{part.part_id}</span>
+                                  <br />
+                                  <span className="muted small">{part.item_description || "No item description"}</span>
+                                </td>
                                 <td>
                                   <input
                                     className="field__input field__input--narrow"

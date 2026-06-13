@@ -2,6 +2,7 @@ import type { Configuration, RedirectRequest } from "@azure/msal-browser";
 
 const tenantId = import.meta.env.VITE_AZURE_TENANT_ID?.trim();
 const clientId = import.meta.env.VITE_AZURE_CLIENT_ID?.trim();
+const authorityHost = import.meta.env.VITE_AZURE_AUTHORITY_HOST?.trim() || "https://login.microsoftonline.com";
 export const defaultLoginHint = import.meta.env.VITE_AZURE_LOGIN_HINT?.trim();
 
 function getDefaultRedirectUri() {
@@ -23,7 +24,7 @@ export const isSecureAuthContext =
 export const msalConfig: Configuration = {
   auth: {
     clientId: clientId || "missing-client-id",
-    authority: tenantId ? `https://login.microsoftonline.com/${tenantId}` : undefined,
+    authority: tenantId ? `${authorityHost.replace(/\/+$/, "")}/${tenantId}` : undefined,
     redirectUri: getDefaultRedirectUri(),
     postLogoutRedirectUri: getDefaultRedirectUri(),
   },

@@ -254,6 +254,10 @@ export function resetInventory({ actor } = {}) {
   const a = String(actor ?? "").trim() || "unknown";
   const tx = db.transaction(() => {
     const before = db.prepare("SELECT COUNT(*) AS c FROM inventory_parts").get().c;
+    const pickTicketsBefore = db.prepare("SELECT COUNT(*) AS c FROM pick_tickets").get().c;
+    const pickTicketLinesBefore = db.prepare("SELECT COUNT(*) AS c FROM pick_ticket_lines").get().c;
+    db.exec("DELETE FROM pick_ticket_lines;");
+    db.exec("DELETE FROM pick_tickets;");
     db.exec("DELETE FROM inventory_parts;");
     const after = db.prepare("SELECT COUNT(*) AS c FROM inventory_parts").get().c;
     appendAudit({
@@ -261,9 +265,19 @@ export function resetInventory({ actor } = {}) {
       action: "inventory_reset",
       entity: "inventory_parts",
       entity_id: null,
-      payload: { before_count: before, after_count: after },
+      payload: {
+        before_count: before,
+        after_count: after,
+        pick_tickets_deleted: pickTicketsBefore,
+        pick_ticket_lines_deleted: pickTicketLinesBefore,
+      },
     });
-    return { before_count: before, after_count: after };
+    return {
+      before_count: before,
+      after_count: after,
+      pick_tickets_deleted: pickTicketsBefore,
+      pick_ticket_lines_deleted: pickTicketLinesBefore,
+    };
   });
   return tx();
 }

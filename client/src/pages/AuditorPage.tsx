@@ -174,8 +174,17 @@ export function AuditorPage() {
       setError(body.error ?? "Reset inventory failed.");
       return;
     }
-    const body = (await res.json()) as { before_count: number; after_count: number };
-    setAdminBanner(`Inventory reset: ${body.before_count} → ${body.after_count} row(s).`);
+    const body = (await res.json()) as {
+      before_count: number;
+      after_count: number;
+      pick_tickets_deleted?: number;
+      pick_ticket_lines_deleted?: number;
+    };
+    const ticketText =
+      body.pick_tickets_deleted || body.pick_ticket_lines_deleted
+        ? ` Cleared ${body.pick_tickets_deleted ?? 0} related ticket(s) and ${body.pick_ticket_lines_deleted ?? 0} ticket line(s).`
+        : "";
+    setAdminBanner(`Inventory reset: ${body.before_count} → ${body.after_count} row(s).${ticketText}`);
     await load();
   }
 

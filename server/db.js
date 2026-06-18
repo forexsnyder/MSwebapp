@@ -12,6 +12,9 @@ const dbPath = envDbPath.trim() || join(defaultDataDir, "app.db");
 mkdirSync(dirname(dbPath), { recursive: true });
 const db = new Database(dbPath);
 db.pragma("foreign_keys = ON");
+db.pragma("journal_mode = WAL");
+db.pragma("synchronous = NORMAL");
+db.pragma("busy_timeout = 5000");
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS audit_log (
@@ -898,11 +901,10 @@ async function parseInventoryWorkbookBuffer(buffer) {
   const rows = [];
   for (let rowNumber = 1; rowNumber <= sheet.rowCount; rowNumber++) {
     const row = sheet.getRow(rowNumber);
-    const values = [];
-    for (let colNumber = 1; colNumber <= sheet.columnCount; colNumber++) {
-      const value = row.getCell(colNumber).value;
-      values.push(value && typeof value === "object" && "text" in value ? value.text : value);
-    }
+    const values = Array.from({ length: sheet.columnCount }, (_, index) => {
+      const value = row.values[index + 1];
+      return value && typeof value === "object" && "text" in value ? value.text : value;
+    });
     if (values.some((v) => String(v ?? "").trim() !== "")) rows.push(values);
   }
   return rows;
@@ -1041,6 +1043,16 @@ export function exportInventoryCsv() {
 
 function importInventoryRecords({ actor, records, sourceFormat }) {
   const a = String(actor ?? "").trim() || "unknown";
+  const inventoryIdentityKey = (row) =>
+    [
+      row.part_id,
+      row.part_revision_id,
+      row.manufacturing_order_id,
+      row.component_order_id,
+      row.component_part_id,
+      row.component_part_revision_id,
+      row.mo_status_code_description,
+    ].join("\x1f");
   const upsert = db.prepare(
     `INSERT INTO inventory_parts (
        part_id, part_revision_id, item_description, on_hand_quantity, inventory_abbreviation_code,
@@ -1057,26 +1069,27 @@ function importInventoryRecords({ actor, records, sourceFormat }) {
        updated_at = datetime('now')`,
   );
 
-  const getExisting = db.prepare(
-    `SELECT id, item_description, on_hand_quantity, inventory_abbreviation_code, default_inventory_location_id, to_issue_quantity, updated_at
-     FROM inventory_parts
-     WHERE part_id = ? AND part_revision_id = ? AND manufacturing_order_id = ? AND component_order_id = ?
-       AND component_part_id = ? AND component_part_revision_id = ? AND mo_status_code_description = ?`,
-  );
-
   const tx = db.transaction(() => {
     let inserted = 0;
     let updated = 0;
+    const existingKeys = new Set(
+      db
+        .prepare(
+          `SELECT
+             part_id,
+             part_revision_id,
+             manufacturing_order_id,
+             component_order_id,
+             component_part_id,
+             component_part_revision_id,
+             mo_status_code_description
+           FROM inventory_parts`,
+        )
+        .all()
+        .map(inventoryIdentityKey),
+    );
     for (const record of records) {
-      const before = getExisting.get(
-        record.part_id,
-        record.part_revision_id,
-        record.manufacturing_order_id,
-        record.component_order_id,
-        record.component_part_id,
-        record.component_part_revision_id,
-        record.mo_status_code_description,
-      );
+      const key = inventoryIdentityKey(record);
       upsert.run(
         record.part_id,
         record.part_revision_id,
@@ -1091,8 +1104,12 @@ function importInventoryRecords({ actor, records, sourceFormat }) {
         record.to_issue_quantity,
         record.mo_status_code_description,
       );
-      if (!before) inserted++;
-      else updated++;
+      if (existingKeys.has(key)) {
+        updated++;
+      } else {
+        inserted++;
+        existingKeys.add(key);
+      }
     }
     appendAudit({
       actor: a,

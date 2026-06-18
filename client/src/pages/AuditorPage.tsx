@@ -5,7 +5,7 @@ type TabId = "audit" | "import" | "export";
 
 type ImportFilePayload =
   | { kind: "csv"; csv: string }
-  | { kind: "xlsx"; workbookBase64: string };
+  | { kind: "xlsx"; file: File };
 
 function safeJsonParse(text: string): unknown {
   try {
@@ -113,15 +113,13 @@ export function AuditorPage() {
     }
     setFileName(file.name);
     const lowerName = file.name.toLowerCase();
-    if (lowerName.endsWith(".xlsx") || lowerName.endsWith(".xls")) {
-      const buffer = await file.arrayBuffer();
-      let binary = "";
-      const bytes = new Uint8Array(buffer);
-      const chunkSize = 0x8000;
-      for (let i = 0; i < bytes.length; i += chunkSize) {
-        binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
-      }
-      setImportFile({ kind: "xlsx", workbookBase64: window.btoa(binary) });
+    if (lowerName.endsWith(".xlsx")) {
+      setImportFile({ kind: "xlsx", file });
+      return;
+    }
+    if (lowerName.endsWith(".xls")) {
+      setImportFile(null);
+      setError("Choose an .xlsx workbook. Older .xls files are not supported.");
       return;
     }
     setImportFile({ kind: "csv", csv: await file.text() });
@@ -135,15 +133,19 @@ export function AuditorPage() {
       return;
     }
     setImporting(true);
-    const requestBody =
+    const actorName = actor.trim() || "unknown";
+    const res =
       importFile.kind === "xlsx"
-        ? { actor: actor.trim() || "unknown", workbookBase64: importFile.workbookBase64 }
-        : { actor: actor.trim() || "unknown", csv: importFile.csv };
-    const res = await fetch("/api/inventory/import", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(requestBody),
-    });
+        ? await fetch(`/api/inventory/import.xlsx?actor=${encodeURIComponent(actorName)}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/octet-stream" },
+            body: importFile.file,
+          })
+        : await fetch("/api/inventory/import", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ actor: actorName, csv: importFile.csv }),
+          });
     setImporting(false);
     if (!res.ok) {
       const body = (await res.json().catch(() => ({}))) as { error?: string };
@@ -490,11 +492,11 @@ export function AuditorPage() {
               <input className="field__input" value={actor} onChange={(e) => setActor(e.target.value)} />
             </label>
             <label className="field">
-              <span className="field__label">Excel or CSV file</span>
+              <span className="field__label">Excel (.xlsx) or CSV file</span>
               <input
                 className="field__input"
                 type="file"
-                accept=".xlsx,.xls,.csv,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
+                accept=".xlsx,.csv,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 onChange={(e) => onPickFile(e.target.files?.[0] ?? null)}
               />
               {fileName && <div className="muted small">Selected: {fileName}</div>}

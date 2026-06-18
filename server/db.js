@@ -889,12 +889,10 @@ function normalizeImportHeader(value) {
     .replace(/^_+|_+$/g, "");
 }
 
-async function parseInventoryWorkbook(base64) {
-  const raw = String(base64 ?? "").trim();
-  if (!raw) throw new Error("Workbook payload is empty");
-  const data = raw.includes(",") ? raw.split(",").pop() : raw;
+async function parseInventoryWorkbookBuffer(buffer) {
+  if (!buffer || buffer.length === 0) throw new Error("Workbook payload is empty");
   const workbook = new ExcelJS.Workbook();
-  await workbook.xlsx.load(Buffer.from(data, "base64"));
+  await workbook.xlsx.load(buffer);
   const sheet = workbook.worksheets[0];
   if (!sheet) throw new Error("Workbook must include at least one worksheet");
   const rows = [];
@@ -908,6 +906,13 @@ async function parseInventoryWorkbook(base64) {
     if (values.some((v) => String(v ?? "").trim() !== "")) rows.push(values);
   }
   return rows;
+}
+
+async function parseInventoryWorkbook(base64) {
+  const raw = String(base64 ?? "").trim();
+  if (!raw) throw new Error("Workbook payload is empty");
+  const data = raw.includes(",") ? raw.split(",").pop() : raw;
+  return parseInventoryWorkbookBuffer(Buffer.from(data, "base64"));
 }
 
 function rowsToInventoryRecords(rows) {
@@ -1086,38 +1091,8 @@ function importInventoryRecords({ actor, records, sourceFormat }) {
         record.to_issue_quantity,
         record.mo_status_code_description,
       );
-      const after = getExisting.get(
-        record.part_id,
-        record.part_revision_id,
-        record.manufacturing_order_id,
-        record.component_order_id,
-        record.component_part_id,
-        record.component_part_revision_id,
-        record.mo_status_code_description,
-      );
-
       if (!before) inserted++;
       else updated++;
-
-      appendAudit({
-        actor: a,
-        action: before ? "inventory_row_updated" : "inventory_row_inserted",
-        entity: "inventory_part",
-        entity_id: String(after?.id ?? ""),
-        payload: {
-          identity: {
-            part_id: record.part_id,
-            part_revision_id: record.part_revision_id,
-            manufacturing_order_id: record.manufacturing_order_id,
-            component_order_id: record.component_order_id,
-            component_part_id: record.component_part_id,
-            component_part_revision_id: record.component_part_revision_id,
-            mo_status_code_description: record.mo_status_code_description,
-          },
-          before,
-          after,
-        },
-      });
     }
     appendAudit({
       actor: a,
@@ -1139,5 +1114,10 @@ export function importInventoryCsv({ actor, csvText }) {
 
 export async function importInventoryWorkbook({ actor, workbookBase64 }) {
   const records = rowsToInventoryRecords(await parseInventoryWorkbook(workbookBase64));
+  return importInventoryRecords({ actor, records, sourceFormat: "xlsx" });
+}
+
+export async function importInventoryWorkbookBuffer({ actor, workbookBuffer }) {
+  const records = rowsToInventoryRecords(await parseInventoryWorkbookBuffer(workbookBuffer));
   return importInventoryRecords({ actor, records, sourceFormat: "xlsx" });
 }

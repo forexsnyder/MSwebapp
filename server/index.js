@@ -14,6 +14,7 @@ import {
   getPickTicket,
   importInventoryCsv,
   importInventoryWorkbook,
+  importInventoryWorkbookBuffer,
   listAuditLog,
   listPickTickets,
   listUserPickTicketHistory,
@@ -60,7 +61,8 @@ if (!isProduction) {
   app.use(cors({ origin: allow }));
 }
 
-app.use(express.json({ limit: process.env.JSON_LIMIT ?? "25mb" }));
+const importBodyLimit = process.env.IMPORT_BODY_LIMIT ?? "100mb";
+app.use(express.json({ limit: process.env.JSON_LIMIT ?? importBodyLimit }));
 
 const adminToken = process.env.ADMIN_TOKEN ? String(process.env.ADMIN_TOKEN) : "";
 app.use("/api/admin", (req, res, next) => {
@@ -275,6 +277,20 @@ app.post("/api/inventory/import", async (req, res) => {
   }
 });
 
+app.post(
+  "/api/inventory/import.xlsx",
+  express.raw({ type: "*/*", limit: importBodyLimit }),
+  async (req, res) => {
+    try {
+      const actor = req.query.actor ?? req.get("x-import-actor") ?? "unknown";
+      const result = await importInventoryWorkbookBuffer({ actor, workbookBuffer: req.body });
+      res.json({ ok: true, ...result });
+    } catch (e) {
+      res.status(400).json({ error: e.message || "import failed" });
+    }
+  },
+);
+
 app.get("/api/inventory/export.csv", (_req, res) => {
   const csv = exportInventoryCsv();
   res.setHeader("Content-Type", "text/csv; charset=utf-8");
@@ -299,7 +315,7 @@ if (hasClientBuild) {
   });
 }
 
-app.listen(PORT, "0.0.0.0", () => {
+const server = app.listen(PORT, "0.0.0.0", () => {
   if (hasClientBuild) {
     console.log(
       `http://0.0.0.0:${PORT} — API + web UI (from client/dist); on this machine: http://localhost:${PORT}; other PCs: http://<this-vm-lan-ip>:${PORT}`,
@@ -310,3 +326,5 @@ app.listen(PORT, "0.0.0.0", () => {
     );
   }
 });
+server.requestTimeout = Number(process.env.REQUEST_TIMEOUT_MS ?? 600000);
+server.headersTimeout = Number(process.env.HEADERS_TIMEOUT_MS ?? 610000);

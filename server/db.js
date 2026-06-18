@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import ExcelJS from "exceljs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const defaultDataDir = join(__dirname, "data");
@@ -27,6 +28,11 @@ db.exec(`
   );
 
   CREATE INDEX IF NOT EXISTS idx_audit_log_created_at ON audit_log (created_at);
+
+  CREATE TABLE IF NOT EXISTS app_metadata (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+  );
 
   CREATE TABLE IF NOT EXISTS inventory_parts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -75,6 +81,17 @@ db.exec(`
 
 function tableColumns(table) {
   return db.prepare(`PRAGMA table_info(${table})`).all().map((c) => c.name);
+}
+
+function metadataValue(key) {
+  return db.prepare(`SELECT value FROM app_metadata WHERE key = ?`).get(key)?.value ?? "";
+}
+
+function setMetadataValue(key, value) {
+  db.prepare(
+    `INSERT INTO app_metadata (key, value) VALUES (?, ?)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+  ).run(key, value);
 }
 
 function migrate() {
@@ -244,6 +261,7 @@ function appendAudit({ actor, action, entity, entity_id = null, payload }) {
 }
 
 function seedIfEmpty() {
+  if (metadataValue("demo_seed_disabled") === "1") return;
   const n = db.prepare("SELECT COUNT(*) AS c FROM inventory_parts").get().c;
   if (n > 0) return;
   const rows = [
@@ -375,6 +393,7 @@ export function resetInventory({ actor } = {}) {
   const tx = db.transaction(() => {
     const before = db.prepare("SELECT COUNT(*) AS c FROM inventory_parts").get().c;
     db.exec("DELETE FROM inventory_parts;");
+    setMetadataValue("demo_seed_disabled", "0");
     seedIfEmpty();
     const after = db.prepare("SELECT COUNT(*) AS c FROM inventory_parts").get().c;
     appendAudit({
@@ -414,6 +433,39 @@ export function clearAuditLog() {
   db.exec("DELETE FROM audit_log;");
   const after = db.prepare("SELECT COUNT(*) AS c FROM audit_log").get().c;
   return { before_count: before, after_count: after };
+}
+
+export function resetDatabase() {
+  const before = {
+    inventory_parts: db.prepare("SELECT COUNT(*) AS c FROM inventory_parts").get().c,
+    pick_tickets: db.prepare("SELECT COUNT(*) AS c FROM pick_tickets").get().c,
+    pick_ticket_lines: db.prepare("SELECT COUNT(*) AS c FROM pick_ticket_lines").get().c,
+    notifications: db.prepare("SELECT COUNT(*) AS c FROM notifications").get().c,
+    audit_log: db.prepare("SELECT COUNT(*) AS c FROM audit_log").get().c,
+  };
+  const tx = db.transaction(() => {
+    db.exec(`
+      DELETE FROM notifications;
+      DELETE FROM pick_ticket_lines;
+      DELETE FROM pick_tickets;
+      DELETE FROM inventory_parts;
+      DELETE FROM audit_log;
+      DELETE FROM sqlite_sequence
+      WHERE name IN ('notifications', 'pick_ticket_lines', 'pick_tickets', 'inventory_parts', 'audit_log');
+    `);
+    setMetadataValue("demo_seed_disabled", "1");
+    return {
+      before,
+      after: {
+        inventory_parts: db.prepare("SELECT COUNT(*) AS c FROM inventory_parts").get().c,
+        pick_tickets: db.prepare("SELECT COUNT(*) AS c FROM pick_tickets").get().c,
+        pick_ticket_lines: db.prepare("SELECT COUNT(*) AS c FROM pick_ticket_lines").get().c,
+        notifications: db.prepare("SELECT COUNT(*) AS c FROM notifications").get().c,
+        audit_log: db.prepare("SELECT COUNT(*) AS c FROM audit_log").get().c,
+      },
+    };
+  });
+  return tx();
 }
 
 export function listAuditLog({ limit = 200 } = {}) {
@@ -955,6 +1007,113 @@ function parseCsv(text) {
   return rows;
 }
 
+function normalizeImportHeader(value) {
+  return String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s*-\s*/g, "_")
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
+async function parseInventoryWorkbook(base64) {
+  const raw = String(base64 ?? "").trim();
+  if (!raw) throw new Error("Workbook payload is empty");
+  const data = raw.includes(",") ? raw.split(",").pop() : raw;
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(Buffer.from(data, "base64"));
+  const sheet = workbook.worksheets[0];
+  if (!sheet) throw new Error("Workbook must include at least one worksheet");
+  const rows = [];
+  for (let rowNumber = 1; rowNumber <= sheet.rowCount; rowNumber++) {
+    const row = sheet.getRow(rowNumber);
+    const values = [];
+    for (let colNumber = 1; colNumber <= sheet.columnCount; colNumber++) {
+      const value = row.getCell(colNumber).value;
+      values.push(value && typeof value === "object" && "text" in value ? value.text : value);
+    }
+    if (values.some((v) => String(v ?? "").trim() !== "")) rows.push(values);
+  }
+  return rows;
+}
+
+function rowsToInventoryRecords(rows) {
+  if (rows.length < 2) throw new Error("Import file must include a header row and at least one data row");
+  const header = rows[0].map(normalizeImportHeader);
+  const idx = (name) => header.indexOf(name);
+  const required = [
+    "part_id",
+    "part_revision_id",
+    "on_hand_quantity",
+    "inventory_abbreviation_code",
+    "default_inventory_location_id",
+    "manufacturing_order_id",
+    "component_part_id",
+    "to_issue_quantity",
+    "mo_status_code_description",
+  ];
+  for (const k of required) {
+    if (idx(k) === -1) throw new Error(`Missing required import column: ${k}`);
+  }
+
+  const records = [];
+  for (let r = 1; r < rows.length; r++) {
+    const row = rows[r];
+    if (row.every((c) => String(c ?? "").trim() === "")) continue;
+    const get = (name) => {
+      const i = idx(name);
+      return i === -1 ? "" : String(row[i] ?? "").trim();
+    };
+    const part_id = get("part_id");
+    const part_revision_id = get("part_revision_id");
+    const item_description = get("item_description") || get("part_id_item_description") || `Item description for ${part_id}`;
+    const on_hand_quantity = Number(get("on_hand_quantity"));
+    const inventory_abbreviation_code = get("inventory_abbreviation_code");
+    const default_inventory_location_id = get("default_inventory_location_id");
+    const manufacturing_order_id = get("manufacturing_order_id");
+    const component_order_id = get("component_order_id");
+    const component_part_id = get("component_part_id");
+    const component_part_revision_id = get("component_part_revision_id");
+    const to_issue_quantity = Number(get("to_issue_quantity"));
+    const mo_status_code_description = get("mo_status_code_description");
+
+    if (
+      !part_id ||
+      !part_revision_id ||
+      !inventory_abbreviation_code ||
+      !default_inventory_location_id ||
+      !manufacturing_order_id ||
+      !component_part_id ||
+      !mo_status_code_description
+    ) {
+      throw new Error(`Row ${r + 1}: missing required value(s)`);
+    }
+    if (!Number.isInteger(on_hand_quantity) || on_hand_quantity < 0) {
+      throw new Error(`Row ${r + 1}: on_hand_quantity must be a whole number >= 0`);
+    }
+    if (!Number.isInteger(to_issue_quantity) || to_issue_quantity < 0) {
+      throw new Error(`Row ${r + 1}: to_issue_quantity must be a whole number >= 0`);
+    }
+
+    records.push({
+      part_id,
+      part_revision_id,
+      item_description,
+      on_hand_quantity,
+      inventory_abbreviation_code,
+      default_inventory_location_id,
+      manufacturing_order_id,
+      component_order_id,
+      component_part_id,
+      component_part_revision_id,
+      to_issue_quantity,
+      mo_status_code_description,
+    });
+  }
+  if (records.length === 0) throw new Error("Import file must include at least one data row");
+  return records;
+}
+
 function csvEscape(value) {
   if (value === null || value === undefined) return "";
   const s = String(value);
@@ -1002,30 +1161,8 @@ export function exportInventoryCsv() {
   return lines.join("\r\n");
 }
 
-export function importInventoryCsv({ actor, csvText }) {
+function importInventoryRecords({ actor, records, sourceFormat }) {
   const a = String(actor ?? "").trim() || "unknown";
-  const text = String(csvText ?? "");
-  const rows = parseCsv(text);
-  if (rows.length < 2) throw new Error("CSV must include a header row and at least one data row");
-  const header = rows[0].map((h) => String(h).trim());
-  const idx = (name) => header.indexOf(name);
-  const required = [
-    "part_id",
-    "part_revision_id",
-    "on_hand_quantity",
-    "inventory_abbreviation_code",
-    "default_inventory_location_id",
-    "manufacturing_order_id",
-    "component_order_id",
-    "component_part_id",
-    "component_part_revision_id",
-    "to_issue_quantity",
-    "mo_status_code_description",
-  ];
-  for (const k of required) {
-    if (idx(k) === -1) throw new Error(`Missing required CSV column: ${k}`);
-  }
-
   const upsert = db.prepare(
     `INSERT INTO inventory_parts (
        part_id, part_revision_id, item_description, on_hand_quantity, inventory_abbreviation_code,
@@ -1052,76 +1189,38 @@ export function importInventoryCsv({ actor, csvText }) {
   const tx = db.transaction(() => {
     let inserted = 0;
     let updated = 0;
-    for (let r = 1; r < rows.length; r++) {
-      const row = rows[r];
-      const part_id = String(row[idx("part_id")] ?? "").trim();
-      const part_revision_id = String(row[idx("part_revision_id")] ?? "").trim();
-      const itemDescriptionIdx = idx("item_description");
-      const item_description =
-        itemDescriptionIdx === -1
-          ? `Item description for ${part_id}`
-          : String(row[itemDescriptionIdx] ?? "").trim();
-      const on_hand_quantity = Number(String(row[idx("on_hand_quantity")] ?? "").trim());
-      const inventory_abbreviation_code = String(row[idx("inventory_abbreviation_code")] ?? "").trim();
-      const default_inventory_location_id = String(row[idx("default_inventory_location_id")] ?? "").trim();
-      const manufacturing_order_id = String(row[idx("manufacturing_order_id")] ?? "").trim();
-      const component_order_id = String(row[idx("component_order_id")] ?? "").trim();
-      const component_part_id = String(row[idx("component_part_id")] ?? "").trim();
-      const component_part_revision_id = String(row[idx("component_part_revision_id")] ?? "").trim();
-      const to_issue_quantity = Number(String(row[idx("to_issue_quantity")] ?? "").trim());
-      const mo_status_code_description = String(row[idx("mo_status_code_description")] ?? "").trim();
-
-      if (
-        !part_id ||
-        !part_revision_id ||
-        !inventory_abbreviation_code ||
-        !default_inventory_location_id ||
-        !manufacturing_order_id ||
-        !component_order_id ||
-        !component_part_id ||
-        !component_part_revision_id ||
-        !mo_status_code_description
-      ) {
-        throw new Error(`Row ${r + 1}: missing required value(s)`);
-      }
-      if (!Number.isInteger(on_hand_quantity) || on_hand_quantity < 0) {
-        throw new Error(`Row ${r + 1}: on_hand_quantity must be a whole number ≥ 0`);
-      }
-      if (!Number.isInteger(to_issue_quantity) || to_issue_quantity < 0) {
-        throw new Error(`Row ${r + 1}: to_issue_quantity must be a whole number ≥ 0`);
-      }
-
+    for (const record of records) {
       const before = getExisting.get(
-        part_id,
-        part_revision_id,
-        manufacturing_order_id,
-        component_order_id,
-        component_part_id,
-        component_part_revision_id,
-        mo_status_code_description,
+        record.part_id,
+        record.part_revision_id,
+        record.manufacturing_order_id,
+        record.component_order_id,
+        record.component_part_id,
+        record.component_part_revision_id,
+        record.mo_status_code_description,
       );
       upsert.run(
-        part_id,
-        part_revision_id,
-        item_description,
-        on_hand_quantity,
-        inventory_abbreviation_code,
-        default_inventory_location_id,
-        manufacturing_order_id,
-        component_order_id,
-        component_part_id,
-        component_part_revision_id,
-        to_issue_quantity,
-        mo_status_code_description,
+        record.part_id,
+        record.part_revision_id,
+        record.item_description,
+        record.on_hand_quantity,
+        record.inventory_abbreviation_code,
+        record.default_inventory_location_id,
+        record.manufacturing_order_id,
+        record.component_order_id,
+        record.component_part_id,
+        record.component_part_revision_id,
+        record.to_issue_quantity,
+        record.mo_status_code_description,
       );
       const after = getExisting.get(
-        part_id,
-        part_revision_id,
-        manufacturing_order_id,
-        component_order_id,
-        component_part_id,
-        component_part_revision_id,
-        mo_status_code_description,
+        record.part_id,
+        record.part_revision_id,
+        record.manufacturing_order_id,
+        record.component_order_id,
+        record.component_part_id,
+        record.component_part_revision_id,
+        record.mo_status_code_description,
       );
 
       if (!before) inserted++;
@@ -1132,18 +1231,40 @@ export function importInventoryCsv({ actor, csvText }) {
         action: before ? "inventory_row_updated" : "inventory_row_inserted",
         entity: "inventory_part",
         entity_id: String(after?.id ?? ""),
-        payload: { identity: { part_id, part_revision_id, manufacturing_order_id, component_order_id, component_part_id, component_part_revision_id, mo_status_code_description }, before, after },
+        payload: {
+          identity: {
+            part_id: record.part_id,
+            part_revision_id: record.part_revision_id,
+            manufacturing_order_id: record.manufacturing_order_id,
+            component_order_id: record.component_order_id,
+            component_part_id: record.component_part_id,
+            component_part_revision_id: record.component_part_revision_id,
+            mo_status_code_description: record.mo_status_code_description,
+          },
+          before,
+          after,
+        },
       });
     }
     appendAudit({
       actor: a,
-      action: "inventory_csv_imported",
+      action: "inventory_imported",
       entity: "inventory_parts",
       entity_id: null,
-      payload: { inserted, updated, rows: rows.length - 1 },
+      payload: { inserted, updated, rows: records.length, source_format: sourceFormat },
     });
-    return { inserted, updated, rows: rows.length - 1 };
+    return { inserted, updated, rows: records.length };
   });
 
   return tx();
+}
+
+export function importInventoryCsv({ actor, csvText }) {
+  const records = rowsToInventoryRecords(parseCsv(String(csvText ?? "")));
+  return importInventoryRecords({ actor, records, sourceFormat: "csv" });
+}
+
+export async function importInventoryWorkbook({ actor, workbookBase64 }) {
+  const records = rowsToInventoryRecords(await parseInventoryWorkbook(workbookBase64));
+  return importInventoryRecords({ actor, records, sourceFormat: "xlsx" });
 }

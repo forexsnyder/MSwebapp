@@ -13,12 +13,14 @@ import {
   exportInventoryCsv,
   getPickTicket,
   importInventoryCsv,
+  importInventoryWorkbook,
   listAuditLog,
   listPickTickets,
   listUserPickTicketHistory,
   listNotifications,
   markNotificationsRead,
   listParts,
+  resetDatabase,
   resetInventory,
 } from "./db.js";
 
@@ -58,7 +60,7 @@ if (!isProduction) {
   app.use(cors({ origin: allow }));
 }
 
-app.use(express.json({ limit: process.env.JSON_LIMIT ?? "1mb" }));
+app.use(express.json({ limit: process.env.JSON_LIMIT ?? "25mb" }));
 
 const adminToken = process.env.ADMIN_TOKEN ? String(process.env.ADMIN_TOKEN) : "";
 app.use("/api/admin", (req, res, next) => {
@@ -235,6 +237,14 @@ app.post("/api/admin/reset-inventory", (req, res) => {
   }
 });
 
+app.post("/api/admin/reset-database", (_req, res) => {
+  try {
+    res.json({ ok: true, ...resetDatabase() });
+  } catch (e) {
+    res.status(400).json({ error: e.message || "reset failed" });
+  }
+});
+
 app.post("/api/admin/clear-pick-queue", (req, res) => {
   try {
     const actor = req.body?.actor ?? "unknown";
@@ -252,11 +262,13 @@ app.post("/api/admin/clear-audit-log", (_req, res) => {
   }
 });
 
-app.post("/api/inventory/import", (req, res) => {
+app.post("/api/inventory/import", async (req, res) => {
   try {
     const actor = req.body?.actor ?? req.body?.requester_name ?? "unknown";
-    const csvText = req.body?.csv;
-    const result = importInventoryCsv({ actor, csvText });
+    const workbookBase64 = req.body?.workbookBase64;
+    const result = workbookBase64
+      ? await importInventoryWorkbook({ actor, workbookBase64 })
+      : importInventoryCsv({ actor, csvText: req.body?.csv });
     res.json({ ok: true, ...result });
   } catch (e) {
     res.status(400).json({ error: e.message || "import failed" });

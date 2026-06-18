@@ -3,6 +3,10 @@ import type { AuditLogEntry } from "../types";
 
 type TabId = "audit" | "import" | "export";
 
+type ImportFilePayload =
+  | { kind: "csv"; csv: string }
+  | { kind: "xlsx"; workbookBase64: string };
+
 function safeJsonParse(text: string): unknown {
   try {
     return JSON.parse(text);
@@ -32,6 +36,10 @@ function summarizeAuditRow(r: AuditLogEntry): string {
   if (r.action === "inventory_csv_imported") {
     return `Imported inventory CSV · ${payload?.rows ?? "—"} row(s) · ${payload?.inserted ?? "—"} inserted · ${payload?.updated ?? "—"} updated`;
   }
+  if (r.action === "inventory_imported") {
+    const source = String(payload?.source_format ?? "file").toUpperCase();
+    return `Imported inventory ${source} · ${payload?.rows ?? "—"} row(s) · ${payload?.inserted ?? "—"} inserted · ${payload?.updated ?? "—"} updated`;
+  }
   if (r.action === "inventory_reset") {
     return `Inventory reset · ${payload?.before_count ?? "—"} → ${payload?.after_count ?? "—"} row(s)`;
   }
@@ -48,11 +56,11 @@ export function AuditorPage() {
   const [error, setError] = useState<string | null>(null);
 
   const [actor, setActor] = useState("test_auditor");
-  const [adminBusy, setAdminBusy] = useState<null | "resetInventory" | "clearPickQueue" | "clearAuditLog">(null);
+  const [adminBusy, setAdminBusy] = useState<null | "resetInventory" | "resetDatabase" | "clearPickQueue" | "clearAuditLog">(null);
   const [adminBanner, setAdminBanner] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<number | null>(null);
   const [fileName, setFileName] = useState<string | null>(null);
-  const [csvText, setCsvText] = useState<string>("");
+  const [importFile, setImportFile] = useState<ImportFilePayload | null>(null);
   const [importing, setImporting] = useState(false);
   const [importResult, setImportResult] = useState<{ inserted: number; updated: number; rows: number } | null>(
     null,
@@ -100,25 +108,41 @@ export function AuditorPage() {
     setImportResult(null);
     if (!file) {
       setFileName(null);
-      setCsvText("");
+      setImportFile(null);
       return;
     }
     setFileName(file.name);
-    setCsvText(await file.text());
+    const lowerName = file.name.toLowerCase();
+    if (lowerName.endsWith(".xlsx") || lowerName.endsWith(".xls")) {
+      const buffer = await file.arrayBuffer();
+      let binary = "";
+      const bytes = new Uint8Array(buffer);
+      const chunkSize = 0x8000;
+      for (let i = 0; i < bytes.length; i += chunkSize) {
+        binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+      }
+      setImportFile({ kind: "xlsx", workbookBase64: window.btoa(binary) });
+      return;
+    }
+    setImportFile({ kind: "csv", csv: await file.text() });
   }
 
   async function runImport() {
     setError(null);
     setImportResult(null);
-    if (!csvText.trim()) {
-      setError("Choose a CSV file first.");
+    if (!importFile) {
+      setError("Choose an Excel or CSV file first.");
       return;
     }
     setImporting(true);
+    const requestBody =
+      importFile.kind === "xlsx"
+        ? { actor: actor.trim() || "unknown", workbookBase64: importFile.workbookBase64 }
+        : { actor: actor.trim() || "unknown", csv: importFile.csv };
     const res = await fetch("/api/inventory/import", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ actor: actor.trim() || "unknown", csv: csvText }),
+      body: JSON.stringify(requestBody),
     });
     setImporting(false);
     if (!res.ok) {
@@ -126,8 +150,8 @@ export function AuditorPage() {
       setError(body.error ?? "Import failed.");
       return;
     }
-    const body = (await res.json()) as { inserted: number; updated: number; rows: number };
-    setImportResult({ inserted: body.inserted, updated: body.updated, rows: body.rows });
+    const result = (await res.json()) as { inserted: number; updated: number; rows: number };
+    setImportResult({ inserted: result.inserted, updated: result.updated, rows: result.rows });
     await load();
   }
 
@@ -152,6 +176,36 @@ export function AuditorPage() {
     }
     const body = (await res.json()) as { before_count: number; after_count: number };
     setAdminBanner(`Inventory reset: ${body.before_count} → ${body.after_count} row(s).`);
+    await load();
+  }
+
+  async function resetDatabase() {
+    setError(null);
+    setAdminBanner(null);
+    const ok = window.confirm(
+      "Reset entire database?\n\nThis will delete ALL inventory, pick tickets, ticket lines, notifications, and audit log entries. Demo inventory will stay disabled until you explicitly reset inventory.",
+    );
+    if (!ok) return;
+    setAdminBusy("resetDatabase");
+    const res = await fetch("/api/admin/reset-database", { method: "POST" });
+    setAdminBusy(null);
+    if (!res.ok) {
+      const body = (await res.json().catch(() => ({}))) as { error?: string };
+      setError(body.error ?? "Reset database failed.");
+      return;
+    }
+    const body = (await res.json()) as {
+      before: {
+        inventory_parts: number;
+        pick_tickets: number;
+        pick_ticket_lines: number;
+        notifications: number;
+        audit_log: number;
+      };
+    };
+    setAdminBanner(
+      `Database reset: cleared ${body.before.inventory_parts} inventory row(s), ${body.before.pick_tickets} ticket(s), ${body.before.pick_ticket_lines} ticket line(s), ${body.before.notifications} notification(s), and ${body.before.audit_log} audit entry(s).`,
+    );
     await load();
   }
 
@@ -204,7 +258,7 @@ export function AuditorPage() {
       <div className="ui-card ui-card--padded">
         <h2 className="ui-card__section-title">Auditor</h2>
         <p className="page__intro page__intro--tight">
-          Audit log is append-only and hash-chained for tamper evidence. Import/export inventory CSV here.
+          Audit log is append-only and hash-chained for tamper evidence. Import inventory from the Excel template and export inventory CSV here.
         </p>
 
         <div className="inventory-tabs" role="tablist" aria-label="Auditor sections">
@@ -224,7 +278,7 @@ export function AuditorPage() {
             className={`inventory-tab${tab === "import" ? " inventory-tab--active" : ""}`}
             onClick={() => setTab("import")}
           >
-            Import inventory CSV
+            Import inventory
           </button>
           <button
             type="button"
@@ -255,6 +309,14 @@ export function AuditorPage() {
               disabled={adminBusy !== null || importing}
             >
               {adminBusy === "resetInventory" ? "Resetting…" : "Reset inventory database"}
+            </button>
+            <button
+              type="button"
+              className="btn btn--danger-ghost"
+              onClick={resetDatabase}
+              disabled={adminBusy !== null || importing}
+            >
+              {adminBusy === "resetDatabase" ? "Resetting…" : "Reset database"}
             </button>
             <button
               type="button"
@@ -413,23 +475,23 @@ export function AuditorPage() {
 
         {tab === "import" && (
           <section className="card" style={{ marginTop: "1rem" }}>
-            <h3 className="section-title">Upload latest inventory CSV</h3>
+            <h3 className="section-title">Upload latest inventory template</h3>
             <label className="field">
               <span className="field__label">Actor (for audit log)</span>
               <input className="field__input" value={actor} onChange={(e) => setActor(e.target.value)} />
             </label>
             <label className="field">
-              <span className="field__label">CSV file</span>
+              <span className="field__label">Excel or CSV file</span>
               <input
                 className="field__input"
                 type="file"
-                accept=".csv,text/csv"
+                accept=".xlsx,.xls,.csv,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
                 onChange={(e) => onPickFile(e.target.files?.[0] ?? null)}
               />
               {fileName && <div className="muted small">Selected: {fileName}</div>}
             </label>
             <button type="button" className="btn btn--primary" disabled={importing} onClick={runImport}>
-              {importing ? "Importing…" : "Import CSV"}
+              {importing ? "Importing…" : "Import file"}
             </button>
             {importResult && (
               <p className="banner banner--success" style={{ marginTop: "0.75rem" }}>
@@ -437,11 +499,11 @@ export function AuditorPage() {
               </p>
             )}
             <details style={{ marginTop: "0.75rem" }}>
-              <summary className="muted small">Expected CSV columns</summary>
+              <summary className="muted small">Expected template columns</summary>
               <p className="muted small" style={{ marginTop: "0.5rem" }}>
-                part_id, part_revision_id, item_description, on_hand_quantity, inventory_abbreviation_code,
-                default_inventory_location_id, manufacturing_order_id, component_order_id, component_part_id,
-                component_part_revision_id, to_issue_quantity, mo_status_code_description
+                Part ID, Part Revision ID, Item Description, Part ID - Item Description, On Hand Quantity,
+                Inventory Abbreviation Code, Default Inventory Location ID, Manufacturing Order ID, Component Part ID,
+                Component Part ID - Item Description, To-Issue Quantity, MO Status Code Description
               </p>
             </details>
           </section>

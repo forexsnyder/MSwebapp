@@ -37,14 +37,14 @@ db.exec(`
     part_id TEXT NOT NULL,
     part_revision_id TEXT NOT NULL,
     item_description TEXT NOT NULL DEFAULT '',
-    on_hand_quantity INTEGER NOT NULL CHECK (on_hand_quantity >= 0),
+    on_hand_quantity REAL NOT NULL CHECK (on_hand_quantity >= 0),
     inventory_abbreviation_code TEXT NOT NULL,
     default_inventory_location_id TEXT NOT NULL,
     manufacturing_order_id TEXT NOT NULL,
     component_order_id TEXT NOT NULL,
     component_part_id TEXT NOT NULL,
     component_part_revision_id TEXT NOT NULL,
-    to_issue_quantity INTEGER NOT NULL CHECK (to_issue_quantity >= 0),
+    to_issue_quantity REAL NOT NULL CHECK (to_issue_quantity >= 0),
     mo_status_code_description TEXT NOT NULL,
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
@@ -884,12 +884,42 @@ function parseCsv(text) {
 }
 
 function normalizeImportHeader(value) {
-  return String(value ?? "")
+  return cellValueToImportText(value)
     .trim()
     .toLowerCase()
     .replace(/\s*-\s*/g, "_")
     .replace(/[^a-z0-9]+/g, "_")
     .replace(/^_+|_+$/g, "");
+}
+
+function cellValueToImportText(value) {
+  if (value === null || value === undefined) return "";
+  if (value instanceof Date) return value.toISOString().slice(0, 10);
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "bigint" || typeof value === "boolean") return String(value);
+  if (typeof value === "object") {
+    if (Object.prototype.hasOwnProperty.call(value, "result")) return cellValueToImportText(value.result);
+    if (Object.prototype.hasOwnProperty.call(value, "text")) return cellValueToImportText(value.text);
+    if (Array.isArray(value.richText)) return value.richText.map((part) => cellValueToImportText(part?.text)).join("");
+    if (Object.prototype.hasOwnProperty.call(value, "hyperlink")) return cellValueToImportText(value.hyperlink);
+    if (Object.prototype.hasOwnProperty.call(value, "error")) return "";
+  }
+  return String(value ?? "");
+}
+
+function parseImportQuantity(value, rowNumber, fieldName) {
+  if (typeof value === "number") {
+    if (!Number.isFinite(value) || value < 0) return 0;
+    return Math.round(value * 1_000_000_000) / 1_000_000_000;
+  }
+  if (typeof value === "boolean") return value ? 1 : 0;
+  const raw = cellValueToImportText(value).trim();
+  if (!raw) return 0;
+  const normalized = raw.replace(/,/g, "");
+  if (!/^\d+(?:\.\d+)?$/.test(normalized)) return 0;
+  const parsed = Number(normalized);
+  if (!Number.isFinite(parsed) || parsed < 0) return 0;
+  return Math.round(parsed * 1_000_000_000) / 1_000_000_000;
 }
 
 async function parseInventoryWorkbookBuffer(buffer) {
@@ -939,41 +969,23 @@ function rowsToInventoryRecords(rows) {
   const records = [];
   for (let r = 1; r < rows.length; r++) {
     const row = rows[r];
-    if (row.every((c) => String(c ?? "").trim() === "")) continue;
+    if (row.every((c) => cellValueToImportText(c).trim() === "")) continue;
     const get = (name) => {
       const i = idx(name);
-      return i === -1 ? "" : String(row[i] ?? "").trim();
+      return i === -1 ? "" : cellValueToImportText(row[i]).trim();
     };
     const part_id = get("part_id");
     const part_revision_id = get("part_revision_id");
-    const item_description = get("item_description") || get("part_id_item_description") || `Item description for ${part_id}`;
-    const on_hand_quantity = Number(get("on_hand_quantity"));
+    const item_description = get("item_description") || get("part_id_item_description");
+    const on_hand_quantity = parseImportQuantity(row[idx("on_hand_quantity")], r + 1, "on_hand_quantity");
     const inventory_abbreviation_code = get("inventory_abbreviation_code");
     const default_inventory_location_id = get("default_inventory_location_id");
     const manufacturing_order_id = get("manufacturing_order_id");
     const component_order_id = get("component_order_id");
     const component_part_id = get("component_part_id");
     const component_part_revision_id = get("component_part_revision_id");
-    const to_issue_quantity = Number(get("to_issue_quantity"));
+    const to_issue_quantity = parseImportQuantity(row[idx("to_issue_quantity")], r + 1, "to_issue_quantity");
     const mo_status_code_description = get("mo_status_code_description");
-
-    if (
-      !part_id ||
-      !part_revision_id ||
-      !inventory_abbreviation_code ||
-      !default_inventory_location_id ||
-      !manufacturing_order_id ||
-      !component_part_id ||
-      !mo_status_code_description
-    ) {
-      throw new Error(`Row ${r + 1}: missing required value(s)`);
-    }
-    if (!Number.isInteger(on_hand_quantity) || on_hand_quantity < 0) {
-      throw new Error(`Row ${r + 1}: on_hand_quantity must be a whole number >= 0`);
-    }
-    if (!Number.isInteger(to_issue_quantity) || to_issue_quantity < 0) {
-      throw new Error(`Row ${r + 1}: to_issue_quantity must be a whole number >= 0`);
-    }
 
     records.push({
       part_id,

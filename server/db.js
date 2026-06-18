@@ -29,11 +29,6 @@ db.exec(`
 
   CREATE INDEX IF NOT EXISTS idx_audit_log_created_at ON audit_log (created_at);
 
-  CREATE TABLE IF NOT EXISTS app_metadata (
-    key TEXT PRIMARY KEY,
-    value TEXT NOT NULL
-  );
-
   CREATE TABLE IF NOT EXISTS inventory_parts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     part_id TEXT NOT NULL,
@@ -81,17 +76,6 @@ db.exec(`
 
 function tableColumns(table) {
   return db.prepare(`PRAGMA table_info(${table})`).all().map((c) => c.name);
-}
-
-function metadataValue(key) {
-  return db.prepare(`SELECT value FROM app_metadata WHERE key = ?`).get(key)?.value ?? "";
-}
-
-function setMetadataValue(key, value) {
-  db.prepare(
-    `INSERT INTO app_metadata (key, value) VALUES (?, ?)
-     ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
-  ).run(key, value);
 }
 
 function migrate() {
@@ -189,25 +173,6 @@ function migrate() {
 
 migrate();
 
-const seed = db.prepare(`
-  INSERT INTO inventory_parts (
-    part_id,
-    part_revision_id,
-    item_description,
-    on_hand_quantity,
-    inventory_abbreviation_code,
-    default_inventory_location_id,
-    manufacturing_order_id,
-    component_order_id,
-    component_part_id,
-    component_part_revision_id,
-    to_issue_quantity,
-    mo_status_code_description,
-    lot_number,
-    updated_at
-  ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))
-`);
-
 function sha256Hex(text) {
   return crypto.createHash("sha256").update(text).digest("hex");
 }
@@ -260,109 +225,6 @@ function appendAudit({ actor, action, entity, entity_id = null, payload }) {
   return { created_at, entry_hash, prev_entry_hash, payload_hash };
 }
 
-function seedIfEmpty() {
-  if (metadataValue("demo_seed_disabled") === "1") return;
-  const n = db.prepare("SELECT COUNT(*) AS c FROM inventory_parts").get().c;
-  if (n > 0) return;
-  const rows = [
-    {
-      part_id: "test_part_001",
-      part_revision_id: "test_rev_A",
-      item_description: "Demo hydraulic actuator assembly",
-      on_hand_quantity: 42,
-      inventory_abbreviation_code: "test_inv_MAIN",
-      default_inventory_location_id: "test_loc_A1",
-      manufacturing_order_id: "test_mo_1001",
-      component_order_id: "test_co_5001",
-      component_part_id: "test_comp_part_01",
-      component_part_revision_id: "test_comp_rev_1",
-      to_issue_quantity: 5,
-      mo_status_code_description: "In Shop",
-      lot_number: "LOT-1001-A",
-    },
-    {
-      part_id: "test_part_002",
-      part_revision_id: "test_rev_B",
-      item_description: "Demo avionics mounting bracket",
-      on_hand_quantity: 7,
-      inventory_abbreviation_code: "test_inv_MAIN",
-      default_inventory_location_id: "test_loc_B2",
-      manufacturing_order_id: "test_mo_1002",
-      component_order_id: "test_co_5002",
-      component_part_id: "test_comp_part_02",
-      component_part_revision_id: "test_comp_rev_2",
-      to_issue_quantity: 12,
-      mo_status_code_description: "In Shop",
-      lot_number: "LOT-1002-A",
-    },
-    {
-      part_id: "test_part_003",
-      part_revision_id: "test_rev_C",
-      item_description: "Demo power distribution cable",
-      on_hand_quantity: 0,
-      inventory_abbreviation_code: "test_inv_SEC",
-      default_inventory_location_id: "test_loc_C3",
-      manufacturing_order_id: "test_mo_1003",
-      component_order_id: "test_co_5003",
-      component_part_id: "test_comp_part_03",
-      component_part_revision_id: "test_comp_rev_3",
-      to_issue_quantity: 1,
-      mo_status_code_description: "In Shop",
-      lot_number: "LOT-1003-A",
-    },
-    {
-      part_id: "test_part_004",
-      part_revision_id: "test_rev_D",
-      item_description: "Demo fastener kit",
-      on_hand_quantity: 128,
-      inventory_abbreviation_code: "test_inv_MAIN",
-      default_inventory_location_id: "test_loc_D4",
-      manufacturing_order_id: "test_mo_1004",
-      component_order_id: "test_co_5004",
-      component_part_id: "test_comp_part_04",
-      component_part_revision_id: "test_comp_rev_4",
-      to_issue_quantity: 0,
-      mo_status_code_description: "In Shop",
-      lot_number: "LOT-1004-A",
-    },
-    {
-      part_id: "test_part_005",
-      part_revision_id: "test_rev_E",
-      item_description: "Demo QA inspection panel",
-      on_hand_quantity: 19,
-      inventory_abbreviation_code: "test_inv_QA",
-      default_inventory_location_id: "test_loc_E5",
-      manufacturing_order_id: "test_mo_1005",
-      component_order_id: "test_co_5005",
-      component_part_id: "test_comp_part_05",
-      component_part_revision_id: "test_comp_rev_5",
-      to_issue_quantity: 3,
-      mo_status_code_description: "In Shop",
-      lot_number: "LOT-1005-A",
-    },
-  ];
-
-  for (const r of rows) {
-    seed.run(
-      r.part_id,
-      r.part_revision_id,
-      r.item_description,
-      r.on_hand_quantity,
-      r.inventory_abbreviation_code,
-      r.default_inventory_location_id,
-      r.manufacturing_order_id,
-      r.component_order_id,
-      r.component_part_id,
-      r.component_part_revision_id,
-      r.to_issue_quantity,
-      r.mo_status_code_description,
-      r.lot_number,
-    );
-  }
-}
-
-seedIfEmpty();
-
 export function listParts() {
   return db
     .prepare(
@@ -393,8 +255,6 @@ export function resetInventory({ actor } = {}) {
   const tx = db.transaction(() => {
     const before = db.prepare("SELECT COUNT(*) AS c FROM inventory_parts").get().c;
     db.exec("DELETE FROM inventory_parts;");
-    setMetadataValue("demo_seed_disabled", "0");
-    seedIfEmpty();
     const after = db.prepare("SELECT COUNT(*) AS c FROM inventory_parts").get().c;
     appendAudit({
       actor: a,
@@ -453,7 +313,6 @@ export function resetDatabase() {
       DELETE FROM sqlite_sequence
       WHERE name IN ('notifications', 'pick_ticket_lines', 'pick_tickets', 'inventory_parts', 'audit_log');
     `);
-    setMetadataValue("demo_seed_disabled", "1");
     return {
       before,
       after: {

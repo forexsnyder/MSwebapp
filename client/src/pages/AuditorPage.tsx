@@ -159,7 +159,7 @@ export function AuditorPage() {
     setError(null);
     setAdminBanner(null);
     const ok = window.confirm(
-      "Reset inventory database?\n\nThis will delete all inventory rows and reseed the default demo inventory.",
+      "Reset inventory database?\n\nThis will delete all inventory rows. No test inventory will be added back.",
     );
     if (!ok) return;
     setAdminBusy("resetInventory");
@@ -183,7 +183,7 @@ export function AuditorPage() {
     setError(null);
     setAdminBanner(null);
     const ok = window.confirm(
-      "Reset entire database?\n\nThis will delete ALL inventory, pick tickets, ticket lines, notifications, and audit log entries. Demo inventory will stay disabled until you explicitly reset inventory.",
+      "Delete database?\n\nThis will delete ALL inventory, pick tickets, ticket lines, notifications, and audit log entries.",
     );
     if (!ok) return;
     setAdminBusy("resetDatabase");
@@ -191,7 +191,7 @@ export function AuditorPage() {
     setAdminBusy(null);
     if (!res.ok) {
       const body = (await res.json().catch(() => ({}))) as { error?: string };
-      setError(body.error ?? "Reset database failed.");
+      setError(body.error ?? "Delete database failed.");
       return;
     }
     const body = (await res.json()) as {
@@ -204,7 +204,7 @@ export function AuditorPage() {
       };
     };
     setAdminBanner(
-      `Database reset: cleared ${body.before.inventory_parts} inventory row(s), ${body.before.pick_tickets} ticket(s), ${body.before.pick_ticket_lines} ticket line(s), ${body.before.notifications} notification(s), and ${body.before.audit_log} audit entry(s).`,
+      `Database deleted: cleared ${body.before.inventory_parts} inventory row(s), ${body.before.pick_tickets} ticket(s), ${body.before.pick_ticket_lines} ticket line(s), ${body.before.notifications} notification(s), and ${body.before.audit_log} audit entry(s).`,
     );
     await load();
   }
@@ -308,7 +308,7 @@ export function AuditorPage() {
               onClick={resetInventoryDb}
               disabled={adminBusy !== null || importing}
             >
-              {adminBusy === "resetInventory" ? "Resetting…" : "Reset inventory database"}
+              {adminBusy === "resetInventory" ? "Resetting…" : "Reset Inventory Database"}
             </button>
             <button
               type="button"
@@ -316,7 +316,7 @@ export function AuditorPage() {
               onClick={resetDatabase}
               disabled={adminBusy !== null || importing}
             >
-              {adminBusy === "resetDatabase" ? "Resetting…" : "Reset database"}
+              {adminBusy === "resetDatabase" ? "Deleting…" : "Delete Database"}
             </button>
             <button
               type="button"
@@ -324,7 +324,7 @@ export function AuditorPage() {
               onClick={clearPickQueue}
               disabled={adminBusy !== null || importing}
             >
-              {adminBusy === "clearPickQueue" ? "Resetting…" : "Reset pick queue"}
+              {adminBusy === "clearPickQueue" ? "Resetting…" : "Reset Pick Queue"}
             </button>
             <button
               type="button"
@@ -332,7 +332,7 @@ export function AuditorPage() {
               onClick={clearAuditLogs}
               disabled={adminBusy !== null || importing}
             >
-              {adminBusy === "clearAuditLog" ? "Resetting…" : "Reset audit logs"}
+              {adminBusy === "clearAuditLog" ? "Resetting…" : "Reset Audit Logs"}
             </button>
           </div>
         </section>

@@ -190,7 +190,6 @@ export function RequestPartsPage() {
     setCart((prev) => ({ ...prev, [selectedPart.id]: q }));
     setQtyDraft("1");
     setSelectedInventoryPartId("");
-    setSelectedMoId("");
     setSelectedComponentPartId("");
   }
 

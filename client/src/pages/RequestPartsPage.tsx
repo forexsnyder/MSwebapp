@@ -122,7 +122,6 @@ export function RequestPartsPage() {
       .map(([id, description]) => ({
         value: id,
         label: description,
-        meta: id,
         searchText: `${id} ${description}`,
       }));
   }, [partsForMo]);

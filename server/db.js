@@ -4,6 +4,7 @@ import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import ExcelJS from "exceljs";
+import JSZip from "jszip";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const defaultDataDir = join(__dirname, "data");
@@ -44,6 +45,7 @@ db.exec(`
     component_order_id TEXT NOT NULL,
     component_part_id TEXT NOT NULL,
     component_part_revision_id TEXT NOT NULL,
+    component_part_id_item_description TEXT NOT NULL DEFAULT '',
     to_issue_quantity REAL NOT NULL CHECK (to_issue_quantity >= 0),
     mo_status_code_description TEXT NOT NULL,
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -68,6 +70,7 @@ db.exec(`
     part_id TEXT NOT NULL DEFAULT '',
     part_revision_id TEXT NOT NULL DEFAULT '',
     item_description TEXT NOT NULL DEFAULT '',
+    component_part_id_item_description TEXT NOT NULL DEFAULT '',
     to_issue_quantity REAL NOT NULL DEFAULT 0 CHECK (to_issue_quantity >= 0),
     mo_status_code_description TEXT NOT NULL DEFAULT '',
     source_row_hash TEXT NOT NULL,
@@ -150,6 +153,7 @@ function migrate() {
       part_id TEXT NOT NULL DEFAULT '',
       part_revision_id TEXT NOT NULL DEFAULT '',
       item_description TEXT NOT NULL DEFAULT '',
+      component_part_id_item_description TEXT NOT NULL DEFAULT '',
       to_issue_quantity REAL NOT NULL DEFAULT 0 CHECK (to_issue_quantity >= 0),
       mo_status_code_description TEXT NOT NULL DEFAULT '',
       source_row_hash TEXT NOT NULL,
@@ -160,6 +164,24 @@ function migrate() {
     CREATE UNIQUE INDEX IF NOT EXISTS ux_manufacturing_orders_source_row_hash
       ON manufacturing_orders (source_row_hash);
   `);
+
+  const moCols = tableColumns("manufacturing_orders");
+  if (moCols.length > 0 && !moCols.includes("component_part_id_item_description")) {
+    db.exec(
+      `ALTER TABLE manufacturing_orders
+       ADD COLUMN component_part_id_item_description TEXT NOT NULL DEFAULT ''`,
+    );
+    db.exec(
+      `UPDATE manufacturing_orders
+       SET component_part_id_item_description =
+         CASE
+           WHEN trim(component_part_id) <> '' AND trim(item_description) <> ''
+             THEN component_part_id || ' - ' || item_description
+           ELSE trim(component_part_id || ' ' || item_description)
+         END
+       WHERE trim(component_part_id_item_description) = ''`,
+    );
+  }
 
   const ticketCols = tableColumns("pick_tickets");
   if (ticketCols.length > 0 && !ticketCols.includes("status")) {
@@ -195,6 +217,12 @@ function migrate() {
     db.exec(`ALTER TABLE inventory_parts ADD COLUMN lot_number TEXT NOT NULL DEFAULT ''`);
     db.exec(
       `UPDATE inventory_parts SET lot_number = 'LOT-' || printf('%04d', id) WHERE trim(lot_number) = ''`,
+    );
+  }
+  if (invCols.length > 0 && !invCols.includes("component_part_id_item_description")) {
+    db.exec(
+      `ALTER TABLE inventory_parts
+       ADD COLUMN component_part_id_item_description TEXT NOT NULL DEFAULT ''`,
     );
   }
 
@@ -282,12 +310,19 @@ export function listParts() {
          component_order_id,
          component_part_id,
          component_part_revision_id,
+         component_part_id_item_description,
          to_issue_quantity,
          mo_status_code_description,
          lot_number,
          updated_at
        FROM inventory_parts
-       ORDER BY part_id, part_revision_id`,
+       WHERE
+         trim(manufacturing_order_id) <> ''
+         OR NOT EXISTS (
+           SELECT 1 FROM inventory_parts mo_rows
+           WHERE trim(mo_rows.manufacturing_order_id) <> ''
+         )
+       ORDER BY manufacturing_order_id, component_part_id, part_id, part_revision_id`,
     )
     .all();
 }
@@ -982,12 +1017,112 @@ function parseImportQuantity(value, rowNumber, fieldName) {
   return Math.round(parsed * 1_000_000_000) / 1_000_000_000;
 }
 
+function decodeXmlText(value) {
+  return String(value ?? "")
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&");
+}
+
+function xmlAttributes(tag) {
+  const attrs = {};
+  const attrRe = /([\w:.-]+)="([^"]*)"/g;
+  let match;
+  while ((match = attrRe.exec(tag))) attrs[match[1]] = decodeXmlText(match[2]);
+  return attrs;
+}
+
+function columnIndexFromCellRef(ref) {
+  const letters = String(ref ?? "").match(/^[A-Z]+/i)?.[0]?.toUpperCase();
+  if (!letters) return null;
+  let index = 0;
+  for (const ch of letters) index = index * 26 + ch.charCodeAt(0) - 64;
+  return index - 1;
+}
+
+function textFromXmlRuns(xml) {
+  return Array.from(String(xml ?? "").matchAll(/<t\b[^>]*>([\s\S]*?)<\/t>/g))
+    .map((match) => decodeXmlText(match[1]))
+    .join("");
+}
+
+function parseSharedStringsXml(xml) {
+  return Array.from(String(xml ?? "").matchAll(/<si\b[^>]*>([\s\S]*?)<\/si>/g)).map((match) =>
+    textFromXmlRuns(match[1]),
+  );
+}
+
+function parseWorksheetRowsXml(xml, sharedStrings) {
+  const rows = [];
+  const rowRe = /<row\b[^>]*>([\s\S]*?)<\/row>/g;
+  let rowMatch;
+  while ((rowMatch = rowRe.exec(xml))) {
+    const cells = [];
+    const cellRe = /<c\b([^>]*)>([\s\S]*?)<\/c>|<c\b([^>]*)\/>/g;
+    let cellMatch;
+    while ((cellMatch = cellRe.exec(rowMatch[1]))) {
+      const attrs = xmlAttributes(cellMatch[1] || cellMatch[3] || "");
+      const colIndex = columnIndexFromCellRef(attrs.r);
+      if (colIndex === null) continue;
+      const body = cellMatch[2] || "";
+      const rawValue = body.match(/<v\b[^>]*>([\s\S]*?)<\/v>/)?.[1] ?? "";
+      let value = "";
+      if (attrs.t === "s") {
+        value = sharedStrings[Number(rawValue)] ?? "";
+      } else if (attrs.t === "inlineStr") {
+        value = textFromXmlRuns(body);
+      } else if (attrs.t === "str") {
+        value = decodeXmlText(rawValue);
+      } else {
+        value = rawValue === "" ? "" : Number(rawValue);
+        if (Number.isNaN(value)) value = decodeXmlText(rawValue);
+      }
+      cells[colIndex] = value;
+    }
+    if (cells.some((v) => String(v ?? "").trim() !== "")) rows.push(cells.map((v) => v ?? ""));
+  }
+  return rows;
+}
+
+async function parseWorkbookZipRows(bytes) {
+  const zip = await JSZip.loadAsync(bytes);
+  const sharedStringsXml = await zip.file("xl/sharedStrings.xml")?.async("string");
+  const sharedStrings = parseSharedStringsXml(sharedStringsXml ?? "");
+  const worksheetNames = Object.keys(zip.files)
+    .filter((name) => /^xl\/worksheets\/[^/]+\.xml$/i.test(name))
+    .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+
+  for (const worksheetName of worksheetNames) {
+    const worksheetXml = await zip.file(worksheetName)?.async("string");
+    if (!worksheetXml) continue;
+    const rows = parseWorksheetRowsXml(worksheetXml, sharedStrings);
+    if (rows.length > 0) return rows;
+  }
+
+  throw new Error(
+    "Workbook opened but no readable worksheet rows were found. Save/export the file as a normal .xlsx workbook with at least one sheet and try again.",
+  );
+}
+
 async function parseInventoryWorkbookBuffer(buffer) {
   if (!buffer || buffer.length === 0) throw new Error("Workbook payload is empty");
+  const bytes = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer);
+  if (bytes.length === 0) throw new Error("Workbook payload is empty");
+  if (bytes[0] === 0xd0 && bytes[1] === 0xcf && bytes[2] === 0x11 && bytes[3] === 0xe0) {
+    throw new Error("Choose an .xlsx workbook. Older .xls files are not supported.");
+  }
+  if (bytes[0] !== 0x50 || bytes[1] !== 0x4b) {
+    throw new Error("Uploaded file is not a valid .xlsx workbook. Save/export it as .xlsx and try again.");
+  }
   const workbook = new ExcelJS.Workbook();
-  await workbook.xlsx.load(buffer);
+  const workbookData = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+  await workbook.xlsx.load(workbookData);
   const sheet = workbook.worksheets[0];
-  if (!sheet) throw new Error("Workbook must include at least one worksheet");
+  if (!sheet) {
+    return parseWorkbookZipRows(bytes);
+  }
   const rows = [];
   for (let rowNumber = 1; rowNumber <= sheet.rowCount; rowNumber++) {
     const row = sheet.getRow(rowNumber);
@@ -1017,10 +1152,6 @@ function rowsToInventoryRecords(rows) {
     "on_hand_quantity",
     "inventory_abbreviation_code",
     "default_inventory_location_id",
-    "manufacturing_order_id",
-    "component_part_id",
-    "to_issue_quantity",
-    "mo_status_code_description",
   ];
   for (const k of required) {
     if (idx(k) === -1) throw new Error(`Missing required import column: ${k}`);
@@ -1044,7 +1175,8 @@ function rowsToInventoryRecords(rows) {
     const component_order_id = get("component_order_id");
     const component_part_id = get("component_part_id");
     const component_part_revision_id = get("component_part_revision_id");
-    const to_issue_quantity = parseImportQuantity(row[idx("to_issue_quantity")], r + 1, "to_issue_quantity");
+    const to_issue_quantity =
+      idx("to_issue_quantity") === -1 ? 0 : parseImportQuantity(row[idx("to_issue_quantity")], r + 1, "to_issue_quantity");
     const mo_status_code_description = get("mo_status_code_description");
 
     records.push({
@@ -1073,7 +1205,8 @@ function rowsToManufacturingOrderRecords(rows) {
   const required = [
     "manufacturing_order_id",
     "component_part_id",
-    "component_part_revision_id",
+    "item_description",
+    "component_part_id_item_description",
     "to_issue_quantity",
     "mo_status_code_description",
   ];
@@ -1100,7 +1233,10 @@ function rowsToManufacturingOrderRecords(rows) {
     const component_part_revision_id = get("component_part_revision_id");
     const part_id = get("part_id");
     const part_revision_id = get("part_revision_id");
-    const item_description = get("item_description") || get("part_id_item_description");
+    const item_description = get("item_description");
+    const component_part_id_item_description =
+      get("component_part_id_item_description") ||
+      (component_part_id && item_description ? `${component_part_id} - ${item_description}` : "");
     const to_issue_quantity =
       idx("to_issue_quantity") === -1 ? 0 : parseImportQuantity(row[idx("to_issue_quantity")], r + 1, "to_issue_quantity");
     const mo_status_code_description = get("mo_status_code_description");
@@ -1114,6 +1250,7 @@ function rowsToManufacturingOrderRecords(rows) {
       part_id,
       part_revision_id,
       item_description,
+      component_part_id_item_description,
       to_issue_quantity,
       mo_status_code_description,
       source_row_hash,
@@ -1129,6 +1266,76 @@ function csvEscape(value) {
   const s = String(value);
   if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
   return s;
+}
+
+function syncMoRowsToInventoryParts() {
+  const before = db.prepare("SELECT COUNT(*) AS c FROM inventory_parts WHERE trim(manufacturing_order_id) <> ''").get().c;
+  db.exec(`
+    INSERT INTO inventory_parts (
+      part_id,
+      part_revision_id,
+      item_description,
+      on_hand_quantity,
+      inventory_abbreviation_code,
+      default_inventory_location_id,
+      manufacturing_order_id,
+      component_order_id,
+      component_part_id,
+      component_part_revision_id,
+      component_part_id_item_description,
+      to_issue_quantity,
+      mo_status_code_description,
+      updated_at
+    )
+    SELECT
+      inv.part_id,
+      inv.part_revision_id,
+      COALESCE(NULLIF(trim(mo.item_description), ''), inv.item_description),
+      inv.on_hand_quantity,
+      inv.inventory_abbreviation_code,
+      inv.default_inventory_location_id,
+      mo.manufacturing_order_id,
+      mo.component_order_id,
+      mo.component_part_id,
+      COALESCE(NULLIF(trim(mo.component_part_revision_id), ''), inv.part_revision_id),
+      COALESCE(
+        NULLIF(trim(mo.component_part_id_item_description), ''),
+        CASE
+          WHEN trim(mo.component_part_id) <> '' AND trim(mo.item_description) <> ''
+            THEN mo.component_part_id || ' - ' || mo.item_description
+          ELSE trim(mo.component_part_id || ' ' || mo.item_description)
+        END
+      ),
+      mo.to_issue_quantity,
+      mo.mo_status_code_description,
+      datetime('now')
+    FROM manufacturing_orders mo
+    JOIN inventory_parts inv
+      ON trim(inv.manufacturing_order_id) = ''
+     AND trim(inv.component_part_id) = ''
+     AND inv.part_id = mo.component_part_id
+    WHERE trim(mo.manufacturing_order_id) <> ''
+      AND trim(mo.component_part_id) <> ''
+    ON CONFLICT(
+      part_id,
+      part_revision_id,
+      manufacturing_order_id,
+      component_order_id,
+      component_part_id,
+      component_part_revision_id,
+      mo_status_code_description
+    )
+    DO UPDATE SET
+      item_description = excluded.item_description,
+      component_part_id_item_description = excluded.component_part_id_item_description,
+      on_hand_quantity = excluded.on_hand_quantity,
+      inventory_abbreviation_code = excluded.inventory_abbreviation_code,
+      default_inventory_location_id = excluded.default_inventory_location_id,
+      to_issue_quantity = excluded.to_issue_quantity,
+      updated_at = datetime('now')
+  `);
+  const after = db.prepare("SELECT COUNT(*) AS c FROM inventory_parts WHERE trim(manufacturing_order_id) <> ''").get().c;
+  return { before, after, synced: after };
 }
 
 export function exportInventoryCsv() {
@@ -1248,7 +1455,8 @@ function importInventoryRecords({ actor, records, sourceFormat }) {
       entity_id: null,
       payload: { inserted, updated, rows: records.length, source_format: sourceFormat },
     });
-    return { inserted, updated, rows: records.length };
+    const sync = syncMoRowsToInventoryParts();
+    return { inserted, updated, rows: records.length, synced_request_rows: sync.synced };
   });
 
   return tx();
@@ -1274,9 +1482,9 @@ function importManufacturingOrderRecords({ actor, records, sourceFormat }) {
   const upsert = db.prepare(
     `INSERT INTO manufacturing_orders (
        manufacturing_order_id, component_order_id, component_part_id, component_part_revision_id,
-       part_id, part_revision_id, item_description, to_issue_quantity, mo_status_code_description,
-       source_row_hash, raw_json, updated_at
-     ) VALUES (?,?,?,?,?,?,?,?,?,?,?,datetime('now'))
+       part_id, part_revision_id, item_description, component_part_id_item_description,
+       to_issue_quantity, mo_status_code_description, source_row_hash, raw_json, updated_at
+     ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))
      ON CONFLICT(source_row_hash)
      DO UPDATE SET
        manufacturing_order_id = excluded.manufacturing_order_id,
@@ -1286,6 +1494,7 @@ function importManufacturingOrderRecords({ actor, records, sourceFormat }) {
        part_id = excluded.part_id,
        part_revision_id = excluded.part_revision_id,
        item_description = excluded.item_description,
+       component_part_id_item_description = excluded.component_part_id_item_description,
        to_issue_quantity = excluded.to_issue_quantity,
        mo_status_code_description = excluded.mo_status_code_description,
        raw_json = excluded.raw_json,
@@ -1307,6 +1516,7 @@ function importManufacturingOrderRecords({ actor, records, sourceFormat }) {
         record.part_id,
         record.part_revision_id,
         record.item_description,
+        record.component_part_id_item_description,
         record.to_issue_quantity,
         record.mo_status_code_description,
         record.source_row_hash,
@@ -1326,7 +1536,8 @@ function importManufacturingOrderRecords({ actor, records, sourceFormat }) {
       entity_id: null,
       payload: { inserted, updated, rows: records.length, source_format: sourceFormat },
     });
-    return { inserted, updated, rows: records.length };
+    const sync = syncMoRowsToInventoryParts();
+    return { inserted, updated, rows: records.length, synced_request_rows: sync.synced };
   });
 
   return tx();

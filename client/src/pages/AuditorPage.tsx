@@ -579,8 +579,8 @@ export function AuditorPage() {
               <summary className="muted small">Expected template columns</summary>
               <p className="muted small" style={{ marginTop: "0.5rem" }}>
                 {importTarget === "mo"
-                  ? "Manufacturing Order ID, Component Part ID, Component Part Revision ID, To-Issue Quantity, MO Status Code Description"
-                  : "Part ID, Part Revision ID, Item Description, Part ID - Item Description, On Hand Quantity, Inventory Abbreviation Code, Default Inventory Location ID, Manufacturing Order ID, Component Part ID, Item Description, Component Part ID - Item Description, To-Issue Quantity, MO Status Code Description"}
+                  ? "Manufacturing Order ID, Component Part ID, Item Description, Component Part ID - Item Description, To-Issue Quantity, MO Status Code Description"
+                  : "Part ID, Part Revision ID, Item Description, Part ID - Item Description, On Hand Quantity, Inventory Abbreviation Code, Default Inventory Location ID"}
               </p>
             </details>
           </section>

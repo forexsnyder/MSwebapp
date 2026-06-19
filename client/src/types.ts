@@ -11,6 +11,7 @@ export type Part = {
   component_order_id: string;
   component_part_id: string;
   component_part_revision_id: string;
+  component_part_id_item_description: string;
   to_issue_quantity: number;
   mo_status_code_description: string;
   lot_number: string;

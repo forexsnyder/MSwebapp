@@ -107,9 +107,24 @@ export function RequestPartsPage() {
   }, [parts, selectedMoId]);
 
   const componentPartOptions = useMemo(() => {
-    const ids = Array.from(new Set(partsForMo.map((p) => p.component_part_id)));
-    ids.sort((a, b) => a.localeCompare(b));
-    return ids.map((id) => ({ value: id, label: id }));
+    const byId = new Map<string, string>();
+    for (const part of partsForMo) {
+      if (!part.component_part_id) continue;
+      const description =
+        part.component_part_id_item_description?.trim() ||
+        (part.item_description ? `${part.component_part_id} - ${part.item_description}` : part.component_part_id);
+      if (!byId.has(part.component_part_id) || description.length > (byId.get(part.component_part_id)?.length ?? 0)) {
+        byId.set(part.component_part_id, description);
+      }
+    }
+    return Array.from(byId.entries())
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([id, description]) => ({
+        value: id,
+        label: description,
+        meta: id,
+        searchText: `${id} ${description}`,
+      }));
   }, [partsForMo]);
 
   const selectedPartBySearch = useMemo(() => {

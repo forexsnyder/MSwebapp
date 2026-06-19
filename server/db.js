@@ -1143,19 +1143,9 @@ async function parseInventoryWorkbook(base64) {
 }
 
 function rowsToInventoryRecords(rows) {
-  if (rows.length < 2) throw new Error("Import file must include a header row and at least one data row");
+  if (rows.length < 1) throw new Error("Import file must include a header row");
   const header = rows[0].map(normalizeImportHeader);
   const idx = (name) => header.indexOf(name);
-  const required = [
-    "part_id",
-    "part_revision_id",
-    "on_hand_quantity",
-    "inventory_abbreviation_code",
-    "default_inventory_location_id",
-  ];
-  for (const k of required) {
-    if (idx(k) === -1) throw new Error(`Missing required import column: ${k}`);
-  }
 
   const records = [];
   for (let r = 1; r < rows.length; r++) {
@@ -1168,7 +1158,9 @@ function rowsToInventoryRecords(rows) {
     const part_id = get("part_id");
     const part_revision_id = get("part_revision_id");
     const item_description = get("item_description") || get("part_id_item_description");
-    const on_hand_quantity = parseImportQuantity(row[idx("on_hand_quantity")], r + 1, "on_hand_quantity");
+    const onHandIndex = idx("on_hand_quantity");
+    const on_hand_quantity =
+      onHandIndex === -1 ? 0 : parseImportQuantity(row[onHandIndex], r + 1, "on_hand_quantity");
     const inventory_abbreviation_code = get("inventory_abbreviation_code");
     const default_inventory_location_id = get("default_inventory_location_id");
     const manufacturing_order_id = get("manufacturing_order_id");
@@ -1178,6 +1170,8 @@ function rowsToInventoryRecords(rows) {
     const to_issue_quantity =
       idx("to_issue_quantity") === -1 ? 0 : parseImportQuantity(row[idx("to_issue_quantity")], r + 1, "to_issue_quantity");
     const mo_status_code_description = get("mo_status_code_description");
+
+    if (!part_id && !component_part_id && !manufacturing_order_id) continue;
 
     records.push({
       part_id,
@@ -1194,25 +1188,13 @@ function rowsToInventoryRecords(rows) {
       mo_status_code_description,
     });
   }
-  if (records.length === 0) throw new Error("Import file must include at least one data row");
   return records;
 }
 
 function rowsToManufacturingOrderRecords(rows) {
-  if (rows.length < 2) throw new Error("Import file must include a header row and at least one data row");
+  if (rows.length < 1) throw new Error("Import file must include a header row");
   const header = rows[0].map(normalizeImportHeader);
   const idx = (name) => header.indexOf(name);
-  const required = [
-    "manufacturing_order_id",
-    "component_part_id",
-    "item_description",
-    "component_part_id_item_description",
-    "to_issue_quantity",
-    "mo_status_code_description",
-  ];
-  for (const k of required) {
-    if (idx(k) === -1) throw new Error(`Missing required MO import column: ${k}`);
-  }
 
   const records = [];
   for (let r = 1; r < rows.length; r++) {
@@ -1240,6 +1222,9 @@ function rowsToManufacturingOrderRecords(rows) {
     const to_issue_quantity =
       idx("to_issue_quantity") === -1 ? 0 : parseImportQuantity(row[idx("to_issue_quantity")], r + 1, "to_issue_quantity");
     const mo_status_code_description = get("mo_status_code_description");
+
+    if (!manufacturing_order_id && !component_part_id) continue;
+
     const source_row_hash = sha256Hex(canonicalJson(raw));
 
     records.push({
@@ -1257,7 +1242,6 @@ function rowsToManufacturingOrderRecords(rows) {
       raw_json: canonicalJson(raw),
     });
   }
-  if (records.length === 0) throw new Error("Import file must include at least one data row");
   return records;
 }
 

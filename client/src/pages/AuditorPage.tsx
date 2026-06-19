@@ -576,11 +576,14 @@ export function AuditorPage() {
               </p>
             )}
             <details style={{ marginTop: "0.75rem" }}>
-              <summary className="muted small">Expected template columns</summary>
+              <summary className="muted small">Recognized template columns</summary>
               <p className="muted small" style={{ marginTop: "0.5rem" }}>
                 {importTarget === "mo"
                   ? "Manufacturing Order ID, Component Part ID, Item Description, Component Part ID - Item Description, To-Issue Quantity, MO Status Code Description"
                   : "Part ID, Part Revision ID, Item Description, Part ID - Item Description, On Hand Quantity, Inventory Abbreviation Code, Default Inventory Location ID"}
+              </p>
+              <p className="muted small" style={{ marginTop: "0.5rem" }}>
+                Extra columns are allowed. Missing recognized columns import with blank or zero defaults.
               </p>
             </details>
           </section>

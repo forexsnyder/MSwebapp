@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useAuth } from "../auth/AuthContext";
 import type { AuditLogEntry } from "../types";
 
 type TabId = "audit" | "import" | "export";
@@ -6,6 +7,8 @@ type TabId = "audit" | "import" | "export";
 type ImportFilePayload =
   | { kind: "csv"; csv: string }
   | { kind: "xlsx"; file: File };
+
+type ImportTarget = "inventory" | "mo";
 
 function safeJsonParse(text: string): unknown {
   try {
@@ -43,6 +46,13 @@ function summarizeAuditRow(r: AuditLogEntry): string {
   if (r.action === "inventory_reset") {
     return `Inventory reset · ${payload?.before_count ?? "—"} → ${payload?.after_count ?? "—"} row(s)`;
   }
+  if (r.action === "manufacturing_orders_imported") {
+    const source = String(payload?.source_format ?? "file").toUpperCase();
+    return `Imported MO ${source} · ${payload?.rows ?? "—"} row(s) · ${payload?.inserted ?? "—"} inserted · ${payload?.updated ?? "—"} updated`;
+  }
+  if (r.action === "manufacturing_orders_reset") {
+    return `MO reset · ${payload?.before_count ?? "—"} → ${payload?.after_count ?? "—"} row(s)`;
+  }
   if (r.action === "pick_queue_cleared") {
     return `Pick queue cleared · ${payload?.before_count ?? "—"} → ${payload?.after_count ?? "—"} ticket(s)`;
   }
@@ -50,17 +60,19 @@ function summarizeAuditRow(r: AuditLogEntry): string {
 }
 
 export function AuditorPage() {
+  const { user } = useAuth();
   const [tab, setTab] = useState<TabId>("audit");
   const [rows, setRows] = useState<AuditLogEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const [actor, setActor] = useState("test_auditor");
-  const [adminBusy, setAdminBusy] = useState<null | "resetInventory" | "resetDatabase" | "clearPickQueue" | "clearAuditLog">(null);
+  const actor = user?.trim() || "unknown";
+  const [adminBusy, setAdminBusy] = useState<null | "resetInventory" | "resetMo" | "resetDatabase" | "clearPickQueue" | "clearAuditLog">(null);
   const [adminBanner, setAdminBanner] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<number | null>(null);
   const [fileName, setFileName] = useState<string | null>(null);
   const [importFile, setImportFile] = useState<ImportFilePayload | null>(null);
+  const [importTarget, setImportTarget] = useState<ImportTarget>("inventory");
   const [importing, setImporting] = useState(false);
   const [importResult, setImportResult] = useState<{ inserted: number; updated: number; rows: number } | null>(
     null,
@@ -133,15 +145,16 @@ export function AuditorPage() {
       return;
     }
     setImporting(true);
-    const actorName = actor.trim() || "unknown";
+    const actorName = actor;
+    const importBase = importTarget === "mo" ? "/api/mo/import" : "/api/inventory/import";
     const res =
       importFile.kind === "xlsx"
-        ? await fetch(`/api/inventory/import.xlsx?actor=${encodeURIComponent(actorName)}`, {
+        ? await fetch(`${importBase}.xlsx?actor=${encodeURIComponent(actorName)}`, {
             method: "POST",
             headers: { "Content-Type": "application/octet-stream" },
             body: importFile.file,
           })
-        : await fetch("/api/inventory/import", {
+        : await fetch(importBase, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ actor: actorName, csv: importFile.csv }),
@@ -168,7 +181,7 @@ export function AuditorPage() {
     const res = await fetch("/api/admin/reset-inventory", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ actor: actor.trim() || "unknown" }),
+      body: JSON.stringify({ actor }),
     });
     setAdminBusy(null);
     if (!res.ok) {
@@ -190,6 +203,28 @@ export function AuditorPage() {
     await load();
   }
 
+  async function resetMoDb() {
+    setError(null);
+    setAdminBanner(null);
+    const ok = window.confirm("Reset MO?\n\nThis will delete all imported MO rows.");
+    if (!ok) return;
+    setAdminBusy("resetMo");
+    const res = await fetch("/api/admin/reset-mo", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ actor }),
+    });
+    setAdminBusy(null);
+    if (!res.ok) {
+      const body = (await res.json().catch(() => ({}))) as { error?: string };
+      setError(body.error ?? "Reset MO failed.");
+      return;
+    }
+    const body = (await res.json()) as { before_count: number; after_count: number };
+    setAdminBanner(`MO reset: ${body.before_count} → ${body.after_count} row(s).`);
+    await load();
+  }
+
   async function resetDatabase() {
     setError(null);
     setAdminBanner(null);
@@ -208,6 +243,7 @@ export function AuditorPage() {
     const body = (await res.json()) as {
       before: {
         inventory_parts: number;
+        manufacturing_orders: number;
         pick_tickets: number;
         pick_ticket_lines: number;
         notifications: number;
@@ -215,7 +251,7 @@ export function AuditorPage() {
       };
     };
     setAdminBanner(
-      `Database deleted: cleared ${body.before.inventory_parts} inventory row(s), ${body.before.pick_tickets} ticket(s), ${body.before.pick_ticket_lines} ticket line(s), ${body.before.notifications} notification(s), and ${body.before.audit_log} audit entry(s).`,
+      `Database deleted: cleared ${body.before.inventory_parts} inventory row(s), ${body.before.manufacturing_orders} MO row(s), ${body.before.pick_tickets} ticket(s), ${body.before.pick_ticket_lines} ticket line(s), ${body.before.notifications} notification(s), and ${body.before.audit_log} audit entry(s).`,
     );
     await load();
   }
@@ -229,7 +265,7 @@ export function AuditorPage() {
     const res = await fetch("/api/admin/clear-pick-queue", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ actor: actor.trim() || "unknown" }),
+      body: JSON.stringify({ actor }),
     });
     setAdminBusy(null);
     if (!res.ok) {
@@ -289,7 +325,7 @@ export function AuditorPage() {
             className={`inventory-tab${tab === "import" ? " inventory-tab--active" : ""}`}
             onClick={() => setTab("import")}
           >
-            Import inventory
+            Import
           </button>
           <button
             type="button"
@@ -308,10 +344,9 @@ export function AuditorPage() {
             Destructive operations for testing/demo. These affect the local SQLite database immediately.
           </p>
           {adminBanner && <p className="banner banner--success">{adminBanner}</p>}
-          <label className="field" style={{ maxWidth: 420 }}>
-            <span className="field__label">Actor (used for audit entries when applicable)</span>
-            <input className="field__input" value={actor} onChange={(e) => setActor(e.target.value)} />
-          </label>
+          <p className="muted small">
+            Auditor: <span className="mono">{actor}</span>
+          </p>
           <div className="row-actions" style={{ marginTop: "0.5rem", flexWrap: "wrap" }}>
             <button
               type="button"
@@ -319,7 +354,15 @@ export function AuditorPage() {
               onClick={resetInventoryDb}
               disabled={adminBusy !== null || importing}
             >
-              {adminBusy === "resetInventory" ? "Resetting…" : "Reset Inventory Database"}
+              {adminBusy === "resetInventory" ? "Resetting…" : "Reset Inventory"}
+            </button>
+            <button
+              type="button"
+              className="btn btn--danger-ghost"
+              onClick={resetMoDb}
+              disabled={adminBusy !== null || importing}
+            >
+              {adminBusy === "resetMo" ? "Resetting…" : "Reset MO"}
             </button>
             <button
               type="button"
@@ -443,7 +486,7 @@ export function AuditorPage() {
                                                   <span>{ln?.requested_quantity ?? "—"}</span>
                                                 </div>
                                                 <div className="audit-line-card__row">
-                                                  <strong>To-issue qty</strong>
+                                                  <strong>To-issue info</strong>
                                                   <span>{ln?.to_issue_quantity ?? "—"}</span>
                                                 </div>
                                                 <div className="audit-line-card__row">
@@ -486,13 +529,36 @@ export function AuditorPage() {
 
         {tab === "import" && (
           <section className="card" style={{ marginTop: "1rem" }}>
-            <h3 className="section-title">Upload latest inventory template</h3>
+            <h3 className="section-title">Upload latest template</h3>
+            <p className="muted small">
+              Auditor: <span className="mono">{actor}</span>
+            </p>
+            <div className="row-actions" style={{ marginBottom: "0.75rem", flexWrap: "wrap" }}>
+              <button
+                type="button"
+                className={`btn ${importTarget === "inventory" ? "btn--primary" : "btn--ghost"}`}
+                onClick={() => {
+                  setImportTarget("inventory");
+                  setImportResult(null);
+                }}
+              >
+                Import Inventory
+              </button>
+              <button
+                type="button"
+                className={`btn ${importTarget === "mo" ? "btn--primary" : "btn--ghost"}`}
+                onClick={() => {
+                  setImportTarget("mo");
+                  setImportResult(null);
+                }}
+              >
+                Import MO
+              </button>
+            </div>
             <label className="field">
-              <span className="field__label">Actor (for audit log)</span>
-              <input className="field__input" value={actor} onChange={(e) => setActor(e.target.value)} />
-            </label>
-            <label className="field">
-              <span className="field__label">Excel (.xlsx) or CSV file</span>
+              <span className="field__label">
+                {importTarget === "mo" ? "Manufacturing MO (.xlsx) or CSV file" : "Import Template (.xlsx) or CSV file"}
+              </span>
               <input
                 className="field__input"
                 type="file"
@@ -502,19 +568,19 @@ export function AuditorPage() {
               {fileName && <div className="muted small">Selected: {fileName}</div>}
             </label>
             <button type="button" className="btn btn--primary" disabled={importing} onClick={runImport}>
-              {importing ? "Importing…" : "Import file"}
+              {importing ? "Importing…" : importTarget === "mo" ? "Import MO" : "Import Inventory"}
             </button>
             {importResult && (
               <p className="banner banner--success" style={{ marginTop: "0.75rem" }}>
-                Imported {importResult.rows} row(s): {importResult.inserted} inserted, {importResult.updated} updated.
+                Imported {importResult.rows} {importTarget === "mo" ? "MO" : "inventory"} row(s): {importResult.inserted} inserted, {importResult.updated} updated.
               </p>
             )}
             <details style={{ marginTop: "0.75rem" }}>
               <summary className="muted small">Expected template columns</summary>
               <p className="muted small" style={{ marginTop: "0.5rem" }}>
-                Part ID, Part Revision ID, Item Description, Part ID - Item Description, On Hand Quantity,
-                Inventory Abbreviation Code, Default Inventory Location ID, Manufacturing Order ID, Component Part ID,
-                Component Part ID - Item Description, To-Issue Quantity, MO Status Code Description
+                {importTarget === "mo"
+                  ? "Manufacturing Order ID, Component Part ID, Component Part Revision ID, To-Issue Quantity, MO Status Code Description"
+                  : "Part ID, Part Revision ID, Item Description, Part ID - Item Description, On Hand Quantity, Inventory Abbreviation Code, Default Inventory Location ID, Manufacturing Order ID, Component Part ID, Item Description, Component Part ID - Item Description, To-Issue Quantity, MO Status Code Description"}
               </p>
             </details>
           </section>

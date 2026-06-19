@@ -59,6 +59,25 @@ db.exec(`
     mo_status_code_description
   );
 
+  CREATE TABLE IF NOT EXISTS manufacturing_orders (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    manufacturing_order_id TEXT NOT NULL DEFAULT '',
+    component_order_id TEXT NOT NULL DEFAULT '',
+    component_part_id TEXT NOT NULL DEFAULT '',
+    component_part_revision_id TEXT NOT NULL DEFAULT '',
+    part_id TEXT NOT NULL DEFAULT '',
+    part_revision_id TEXT NOT NULL DEFAULT '',
+    item_description TEXT NOT NULL DEFAULT '',
+    to_issue_quantity REAL NOT NULL DEFAULT 0 CHECK (to_issue_quantity >= 0),
+    mo_status_code_description TEXT NOT NULL DEFAULT '',
+    source_row_hash TEXT NOT NULL,
+    raw_json TEXT NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE UNIQUE INDEX IF NOT EXISTS ux_manufacturing_orders_source_row_hash
+    ON manufacturing_orders (source_row_hash);
+
   CREATE TABLE IF NOT EXISTS pick_tickets (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -121,6 +140,26 @@ function migrate() {
       mo_status_code_description
     )`,
   );
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS manufacturing_orders (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      manufacturing_order_id TEXT NOT NULL DEFAULT '',
+      component_order_id TEXT NOT NULL DEFAULT '',
+      component_part_id TEXT NOT NULL DEFAULT '',
+      component_part_revision_id TEXT NOT NULL DEFAULT '',
+      part_id TEXT NOT NULL DEFAULT '',
+      part_revision_id TEXT NOT NULL DEFAULT '',
+      item_description TEXT NOT NULL DEFAULT '',
+      to_issue_quantity REAL NOT NULL DEFAULT 0 CHECK (to_issue_quantity >= 0),
+      mo_status_code_description TEXT NOT NULL DEFAULT '',
+      source_row_hash TEXT NOT NULL,
+      raw_json TEXT NOT NULL,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS ux_manufacturing_orders_source_row_hash
+      ON manufacturing_orders (source_row_hash);
+  `);
 
   const ticketCols = tableColumns("pick_tickets");
   if (ticketCols.length > 0 && !ticketCols.includes("status")) {
@@ -285,6 +324,24 @@ export function resetInventory({ actor } = {}) {
   return tx();
 }
 
+export function resetManufacturingOrders({ actor } = {}) {
+  const a = String(actor ?? "").trim() || "unknown";
+  const tx = db.transaction(() => {
+    const before = db.prepare("SELECT COUNT(*) AS c FROM manufacturing_orders").get().c;
+    db.exec("DELETE FROM manufacturing_orders;");
+    const after = db.prepare("SELECT COUNT(*) AS c FROM manufacturing_orders").get().c;
+    appendAudit({
+      actor: a,
+      action: "manufacturing_orders_reset",
+      entity: "manufacturing_orders",
+      entity_id: null,
+      payload: { before_count: before, after_count: after },
+    });
+    return { before_count: before, after_count: after };
+  });
+  return tx();
+}
+
 export function clearPickQueue({ actor } = {}) {
   const a = String(actor ?? "").trim() || "unknown";
   const tx = db.transaction(() => {
@@ -315,6 +372,7 @@ export function clearAuditLog() {
 export function resetDatabase() {
   const before = {
     inventory_parts: db.prepare("SELECT COUNT(*) AS c FROM inventory_parts").get().c,
+    manufacturing_orders: db.prepare("SELECT COUNT(*) AS c FROM manufacturing_orders").get().c,
     pick_tickets: db.prepare("SELECT COUNT(*) AS c FROM pick_tickets").get().c,
     pick_ticket_lines: db.prepare("SELECT COUNT(*) AS c FROM pick_ticket_lines").get().c,
     notifications: db.prepare("SELECT COUNT(*) AS c FROM notifications").get().c,
@@ -326,14 +384,16 @@ export function resetDatabase() {
       DELETE FROM pick_ticket_lines;
       DELETE FROM pick_tickets;
       DELETE FROM inventory_parts;
+      DELETE FROM manufacturing_orders;
       DELETE FROM audit_log;
       DELETE FROM sqlite_sequence
-      WHERE name IN ('notifications', 'pick_ticket_lines', 'pick_tickets', 'inventory_parts', 'audit_log');
+      WHERE name IN ('notifications', 'pick_ticket_lines', 'pick_tickets', 'inventory_parts', 'manufacturing_orders', 'audit_log');
     `);
     return {
       before,
       after: {
         inventory_parts: db.prepare("SELECT COUNT(*) AS c FROM inventory_parts").get().c,
+        manufacturing_orders: db.prepare("SELECT COUNT(*) AS c FROM manufacturing_orders").get().c,
         pick_tickets: db.prepare("SELECT COUNT(*) AS c FROM pick_tickets").get().c,
         pick_ticket_lines: db.prepare("SELECT COUNT(*) AS c FROM pick_ticket_lines").get().c,
         notifications: db.prepare("SELECT COUNT(*) AS c FROM notifications").get().c,
@@ -1006,6 +1066,64 @@ function rowsToInventoryRecords(rows) {
   return records;
 }
 
+function rowsToManufacturingOrderRecords(rows) {
+  if (rows.length < 2) throw new Error("Import file must include a header row and at least one data row");
+  const header = rows[0].map(normalizeImportHeader);
+  const idx = (name) => header.indexOf(name);
+  const required = [
+    "manufacturing_order_id",
+    "component_part_id",
+    "component_part_revision_id",
+    "to_issue_quantity",
+    "mo_status_code_description",
+  ];
+  for (const k of required) {
+    if (idx(k) === -1) throw new Error(`Missing required MO import column: ${k}`);
+  }
+
+  const records = [];
+  for (let r = 1; r < rows.length; r++) {
+    const row = rows[r];
+    if (row.every((c) => cellValueToImportText(c).trim() === "")) continue;
+    const get = (name) => {
+      const i = idx(name);
+      return i === -1 ? "" : cellValueToImportText(row[i]).trim();
+    };
+    const raw = {};
+    header.forEach((name, index) => {
+      if (!name) return;
+      raw[name] = cellValueToImportText(row[index]).trim();
+    });
+    const manufacturing_order_id = get("manufacturing_order_id");
+    const component_order_id = get("component_order_id");
+    const component_part_id = get("component_part_id");
+    const component_part_revision_id = get("component_part_revision_id");
+    const part_id = get("part_id");
+    const part_revision_id = get("part_revision_id");
+    const item_description = get("item_description") || get("part_id_item_description");
+    const to_issue_quantity =
+      idx("to_issue_quantity") === -1 ? 0 : parseImportQuantity(row[idx("to_issue_quantity")], r + 1, "to_issue_quantity");
+    const mo_status_code_description = get("mo_status_code_description");
+    const source_row_hash = sha256Hex(canonicalJson(raw));
+
+    records.push({
+      manufacturing_order_id,
+      component_order_id,
+      component_part_id,
+      component_part_revision_id,
+      part_id,
+      part_revision_id,
+      item_description,
+      to_issue_quantity,
+      mo_status_code_description,
+      source_row_hash,
+      raw_json: canonicalJson(raw),
+    });
+  }
+  if (records.length === 0) throw new Error("Import file must include at least one data row");
+  return records;
+}
+
 function csvEscape(value) {
   if (value === null || value === undefined) return "";
   const s = String(value);
@@ -1149,4 +1267,82 @@ export async function importInventoryWorkbook({ actor, workbookBase64 }) {
 export async function importInventoryWorkbookBuffer({ actor, workbookBuffer }) {
   const records = rowsToInventoryRecords(await parseInventoryWorkbookBuffer(workbookBuffer));
   return importInventoryRecords({ actor, records, sourceFormat: "xlsx" });
+}
+
+function importManufacturingOrderRecords({ actor, records, sourceFormat }) {
+  const a = String(actor ?? "").trim() || "unknown";
+  const upsert = db.prepare(
+    `INSERT INTO manufacturing_orders (
+       manufacturing_order_id, component_order_id, component_part_id, component_part_revision_id,
+       part_id, part_revision_id, item_description, to_issue_quantity, mo_status_code_description,
+       source_row_hash, raw_json, updated_at
+     ) VALUES (?,?,?,?,?,?,?,?,?,?,?,datetime('now'))
+     ON CONFLICT(source_row_hash)
+     DO UPDATE SET
+       manufacturing_order_id = excluded.manufacturing_order_id,
+       component_order_id = excluded.component_order_id,
+       component_part_id = excluded.component_part_id,
+       component_part_revision_id = excluded.component_part_revision_id,
+       part_id = excluded.part_id,
+       part_revision_id = excluded.part_revision_id,
+       item_description = excluded.item_description,
+       to_issue_quantity = excluded.to_issue_quantity,
+       mo_status_code_description = excluded.mo_status_code_description,
+       raw_json = excluded.raw_json,
+       updated_at = datetime('now')`,
+  );
+
+  const tx = db.transaction(() => {
+    let inserted = 0;
+    let updated = 0;
+    const existingHashes = new Set(
+      db.prepare(`SELECT source_row_hash FROM manufacturing_orders`).all().map((row) => row.source_row_hash),
+    );
+    for (const record of records) {
+      upsert.run(
+        record.manufacturing_order_id,
+        record.component_order_id,
+        record.component_part_id,
+        record.component_part_revision_id,
+        record.part_id,
+        record.part_revision_id,
+        record.item_description,
+        record.to_issue_quantity,
+        record.mo_status_code_description,
+        record.source_row_hash,
+        record.raw_json,
+      );
+      if (existingHashes.has(record.source_row_hash)) {
+        updated++;
+      } else {
+        inserted++;
+        existingHashes.add(record.source_row_hash);
+      }
+    }
+    appendAudit({
+      actor: a,
+      action: "manufacturing_orders_imported",
+      entity: "manufacturing_orders",
+      entity_id: null,
+      payload: { inserted, updated, rows: records.length, source_format: sourceFormat },
+    });
+    return { inserted, updated, rows: records.length };
+  });
+
+  return tx();
+}
+
+export function importManufacturingOrdersCsv({ actor, csvText }) {
+  const records = rowsToManufacturingOrderRecords(parseCsv(String(csvText ?? "")));
+  return importManufacturingOrderRecords({ actor, records, sourceFormat: "csv" });
+}
+
+export async function importManufacturingOrdersWorkbook({ actor, workbookBase64 }) {
+  const records = rowsToManufacturingOrderRecords(await parseInventoryWorkbook(workbookBase64));
+  return importManufacturingOrderRecords({ actor, records, sourceFormat: "xlsx" });
+}
+
+export async function importManufacturingOrdersWorkbookBuffer({ actor, workbookBuffer }) {
+  const records = rowsToManufacturingOrderRecords(await parseInventoryWorkbookBuffer(workbookBuffer));
+  return importManufacturingOrderRecords({ actor, records, sourceFormat: "xlsx" });
 }

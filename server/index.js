@@ -11,6 +11,9 @@ import {
   clearAuditLog,
   clearPickQueue,
   exportInventoryCsv,
+  importManufacturingOrdersCsv,
+  importManufacturingOrdersWorkbook,
+  importManufacturingOrdersWorkbookBuffer,
   getPickTicket,
   importInventoryCsv,
   importInventoryWorkbook,
@@ -23,6 +26,7 @@ import {
   listParts,
   resetDatabase,
   resetInventory,
+  resetManufacturingOrders,
 } from "./db.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -239,6 +243,15 @@ app.post("/api/admin/reset-inventory", (req, res) => {
   }
 });
 
+app.post("/api/admin/reset-mo", (req, res) => {
+  try {
+    const actor = req.body?.actor ?? "unknown";
+    res.json({ ok: true, ...resetManufacturingOrders({ actor }) });
+  } catch (e) {
+    res.status(400).json({ error: e.message || "reset failed" });
+  }
+});
+
 app.post("/api/admin/reset-database", (_req, res) => {
   try {
     res.json({ ok: true, ...resetDatabase() });
@@ -284,6 +297,33 @@ app.post(
     try {
       const actor = req.query.actor ?? req.get("x-import-actor") ?? "unknown";
       const result = await importInventoryWorkbookBuffer({ actor, workbookBuffer: req.body });
+      res.json({ ok: true, ...result });
+    } catch (e) {
+      res.status(400).json({ error: e.message || "import failed" });
+    }
+  },
+);
+
+app.post("/api/mo/import", async (req, res) => {
+  try {
+    const actor = req.body?.actor ?? req.body?.requester_name ?? "unknown";
+    const workbookBase64 = req.body?.workbookBase64;
+    const result = workbookBase64
+      ? await importManufacturingOrdersWorkbook({ actor, workbookBase64 })
+      : importManufacturingOrdersCsv({ actor, csvText: req.body?.csv });
+    res.json({ ok: true, ...result });
+  } catch (e) {
+    res.status(400).json({ error: e.message || "import failed" });
+  }
+});
+
+app.post(
+  "/api/mo/import.xlsx",
+  express.raw({ type: "*/*", limit: importBodyLimit }),
+  async (req, res) => {
+    try {
+      const actor = req.query.actor ?? req.get("x-import-actor") ?? "unknown";
+      const result = await importManufacturingOrdersWorkbookBuffer({ actor, workbookBuffer: req.body });
       res.json({ ok: true, ...result });
     } catch (e) {
       res.status(400).json({ error: e.message || "import failed" });

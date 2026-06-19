@@ -704,6 +704,12 @@ code,
   border: 1px solid rgba(13, 148, 136, 0.25);
 }
 
+.banner--warning {
+  background: #fffbeb;
+  color: #92400e;
+  border: 1px solid rgba(217, 119, 6, 0.25);
+}
+
 /* Forms */
 .stack-form {
   display: flex;
@@ -813,6 +819,32 @@ code,
 
 .requester-build__requester-note {
   margin: -0.25rem 0 0;
+}
+
+.request-choice-divider {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  color: var(--color-text-muted);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.request-choice-divider::before,
+.request-choice-divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--color-border);
+}
+
+.request-choice-divider span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 2rem;
 }
 
 .searchable-select {

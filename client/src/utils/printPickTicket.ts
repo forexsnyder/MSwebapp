@@ -14,7 +14,8 @@ export function formatTicketRef(id: number) {
 
 const PICK_LINE_HEADERS = [
   "MO#",
-  "Part Rev ID",
+  "Part #",
+  "Rev ID",
   "Requested",
   "On Hand",
   "Inv. ABBREV",
@@ -37,7 +38,8 @@ function renderPickLineRow(ln: PickTicketLine, lotDisplay: string) {
   return `
     <tr>
       <td class="mono">${escapeHtml(ln.manufacturing_order_id)}</td>
-      <td class="mono">${escapeHtml(ln.component_part_revision_id)}</td>
+      <td class="mono">${escapeHtml(ln.part_id)}</td>
+      <td class="mono">${escapeHtml(ln.part_revision_id)}</td>
       <td>${ln.requested_quantity}</td>
       <td>${ln.on_hand_quantity}</td>
       <td class="mono">${escapeHtml(ln.inventory_abbreviation_code)}</td>

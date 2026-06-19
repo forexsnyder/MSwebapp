@@ -502,7 +502,8 @@ export function PickOrdersPage() {
                 <thead>
                   <tr>
                     <th>MO#</th>
-                    <th>Part Rev ID</th>
+                    <th>Part #</th>
+                    <th>Rev ID</th>
                     <th>Requested</th>
                     <th>On Hand</th>
                     <th>Inv. ABBREV</th>
@@ -514,7 +515,8 @@ export function PickOrdersPage() {
                   {selected.lines.map((ln) => (
                     <tr key={ln.id}>
                       <td className="mono small">{ln.manufacturing_order_id}</td>
-                      <td className="mono small">{ln.component_part_revision_id}</td>
+                      <td className="mono small">{ln.part_id}</td>
+                      <td className="mono small">{ln.part_revision_id}</td>
                       <td>{ln.requested_quantity}</td>
                       <td>{ln.on_hand_quantity}</td>
                       <td className="mono small">{ln.inventory_abbreviation_code}</td>
@@ -529,7 +531,7 @@ export function PickOrdersPage() {
                               setLineLots((prev) => ({ ...prev, [ln.id]: e.target.value }))
                             }
                             placeholder=""
-                            aria-label={`Lot number for ${ln.component_part_revision_id}`}
+                            aria-label={`Lot number for ${ln.part_id} ${ln.part_revision_id}`}
                           />
                         ) : (
                           <div className="pick-lot-handwrite pick-lot-handwrite--readonly">

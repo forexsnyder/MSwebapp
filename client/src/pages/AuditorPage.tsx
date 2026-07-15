@@ -26,35 +26,35 @@ function summarizeAuditRow(r: AuditLogEntry): string {
     const totalQty = Array.isArray(payload?.lines)
       ? payload.lines.reduce((sum: number, ln: any) => sum + Number(ln?.requested_quantity ?? 0), 0)
       : 0;
-    return `Requester ${requester} created ticket #${payload?.id ?? r.entity_id ?? "—"} · ${lineCount} line(s) · total qty ${totalQty}`;
+    return `Requester ${requester} created ticket #${payload?.id ?? r.entity_id ?? "â€”"} Â· ${lineCount} line(s) Â· total qty ${totalQty}`;
   }
   if (r.action === "pick_ticket_closed") {
     const picker = payload?.closed_by ?? r.actor;
-    const when = payload?.closed_at ?? "—";
-    return `Picker ${picker} closed ticket #${payload?.id ?? r.entity_id ?? "—"} · closed at ${when}`;
+    const when = payload?.closed_at ?? "â€”";
+    return `Picker ${picker} closed ticket #${payload?.id ?? r.entity_id ?? "â€”"} Â· closed at ${when}`;
   }
   if (r.action === "pick_ticket_reopened") {
-    return `Ticket #${payload?.id ?? r.entity_id ?? "—"} reopened by ${r.actor}`;
+    return `Ticket #${payload?.id ?? r.entity_id ?? "â€”"} reopened by ${r.actor}`;
   }
   if (r.action === "inventory_csv_imported") {
-    return `Imported inventory CSV · ${payload?.rows ?? "—"} row(s) · ${payload?.inserted ?? "—"} inserted · ${payload?.updated ?? "—"} updated`;
+    return `Imported inventory CSV Â· ${payload?.rows ?? "â€”"} row(s) Â· ${payload?.inserted ?? "â€”"} inserted Â· ${payload?.updated ?? "â€”"} updated`;
   }
   if (r.action === "inventory_imported") {
     const source = String(payload?.source_format ?? "file").toUpperCase();
-    return `Imported inventory ${source} · ${payload?.rows ?? "—"} row(s) · ${payload?.inserted ?? "—"} inserted · ${payload?.updated ?? "—"} updated`;
+    return `Imported inventory ${source} Â· ${payload?.rows ?? "â€”"} row(s) Â· ${payload?.inserted ?? "â€”"} inserted Â· ${payload?.updated ?? "â€”"} updated`;
   }
   if (r.action === "inventory_reset") {
-    return `Inventory reset · ${payload?.before_count ?? "—"} → ${payload?.after_count ?? "—"} row(s)`;
+    return `Inventory reset Â· ${payload?.before_count ?? "â€”"} â†’ ${payload?.after_count ?? "â€”"} row(s)`;
   }
   if (r.action === "manufacturing_orders_imported") {
     const source = String(payload?.source_format ?? "file").toUpperCase();
-    return `Imported MO ${source} · ${payload?.rows ?? "—"} row(s) · ${payload?.inserted ?? "—"} inserted · ${payload?.updated ?? "—"} updated`;
+    return `Imported MO ${source} Â· ${payload?.rows ?? "â€”"} row(s) Â· ${payload?.inserted ?? "â€”"} inserted Â· ${payload?.updated ?? "â€”"} updated`;
   }
   if (r.action === "manufacturing_orders_reset") {
-    return `MO reset · ${payload?.before_count ?? "—"} → ${payload?.after_count ?? "—"} row(s)`;
+    return `MO reset Â· ${payload?.before_count ?? "â€”"} â†’ ${payload?.after_count ?? "â€”"} row(s)`;
   }
   if (r.action === "pick_queue_cleared") {
-    return `Pick queue cleared · ${payload?.before_count ?? "—"} → ${payload?.after_count ?? "—"} ticket(s)`;
+    return `Pick queue cleared Â· ${payload?.before_count ?? "â€”"} â†’ ${payload?.after_count ?? "â€”"} ticket(s)`;
   }
   return "";
 }
@@ -174,7 +174,7 @@ export function AuditorPage() {
     setError(null);
     setAdminBanner(null);
     const ok = window.confirm(
-      "Reset inventory database?\n\nThis will delete all inventory rows. No test inventory will be added back.",
+      "Reset active inventory?\n\nThis will clear the active inventory catalog. Existing pick tickets and their line details will be preserved.",
     );
     if (!ok) return;
     setAdminBusy("resetInventory");
@@ -192,14 +192,11 @@ export function AuditorPage() {
     const body = (await res.json()) as {
       before_count: number;
       after_count: number;
-      pick_tickets_deleted?: number;
-      pick_ticket_lines_deleted?: number;
+      pick_tickets_preserved?: number;
+      pick_ticket_lines_preserved?: number;
     };
-    const ticketText =
-      body.pick_tickets_deleted || body.pick_ticket_lines_deleted
-        ? ` Cleared ${body.pick_tickets_deleted ?? 0} related ticket(s) and ${body.pick_ticket_lines_deleted ?? 0} ticket line(s).`
-        : "";
-    setAdminBanner(`Inventory reset: ${body.before_count} → ${body.after_count} row(s).${ticketText}`);
+    const ticketText = ` Preserved ${body.pick_tickets_preserved ?? 0} ticket(s) and ${body.pick_ticket_lines_preserved ?? 0} ticket line(s).`;
+    setAdminBanner(`Inventory reset: ${body.before_count} â†’ ${body.after_count} row(s).${ticketText}`);
     await load();
   }
 
@@ -221,7 +218,7 @@ export function AuditorPage() {
       return;
     }
     const body = (await res.json()) as { before_count: number; after_count: number };
-    setAdminBanner(`MO reset: ${body.before_count} → ${body.after_count} row(s).`);
+    setAdminBanner(`MO reset: ${body.before_count} â†’ ${body.after_count} row(s).`);
     await load();
   }
 
@@ -274,7 +271,7 @@ export function AuditorPage() {
       return;
     }
     const body = (await res.json()) as { before_count: number; after_count: number };
-    setAdminBanner(`Pick queue cleared: ${body.before_count} → ${body.after_count} ticket(s).`);
+    setAdminBanner(`Pick queue cleared: ${body.before_count} â†’ ${body.after_count} ticket(s).`);
     await load();
   }
 
@@ -294,7 +291,7 @@ export function AuditorPage() {
       return;
     }
     const body = (await res.json()) as { before_count: number; after_count: number };
-    setAdminBanner(`Audit log cleared: ${body.before_count} → ${body.after_count} entry(s).`);
+    setAdminBanner(`Audit log cleared: ${body.before_count} â†’ ${body.after_count} entry(s).`);
     await load();
   }
 
@@ -354,7 +351,7 @@ export function AuditorPage() {
               onClick={resetInventoryDb}
               disabled={adminBusy !== null || importing}
             >
-              {adminBusy === "resetInventory" ? "Resetting…" : "Reset Inventory"}
+              {adminBusy === "resetInventory" ? "Resettingâ€¦" : "Reset Inventory"}
             </button>
             <button
               type="button"
@@ -362,7 +359,7 @@ export function AuditorPage() {
               onClick={resetMoDb}
               disabled={adminBusy !== null || importing}
             >
-              {adminBusy === "resetMo" ? "Resetting…" : "Reset MO"}
+              {adminBusy === "resetMo" ? "Resettingâ€¦" : "Reset MO"}
             </button>
             <button
               type="button"
@@ -370,7 +367,7 @@ export function AuditorPage() {
               onClick={resetDatabase}
               disabled={adminBusy !== null || importing}
             >
-              {adminBusy === "resetDatabase" ? "Deleting…" : "Delete Database"}
+              {adminBusy === "resetDatabase" ? "Deletingâ€¦" : "Delete Database"}
             </button>
             <button
               type="button"
@@ -378,7 +375,7 @@ export function AuditorPage() {
               onClick={clearPickQueue}
               disabled={adminBusy !== null || importing}
             >
-              {adminBusy === "clearPickQueue" ? "Resetting…" : "Reset Pick Queue"}
+              {adminBusy === "clearPickQueue" ? "Resettingâ€¦" : "Reset Pick Queue"}
             </button>
             <button
               type="button"
@@ -386,7 +383,7 @@ export function AuditorPage() {
               onClick={clearAuditLogs}
               disabled={adminBusy !== null || importing}
             >
-              {adminBusy === "clearAuditLog" ? "Resetting…" : "Reset Audit Logs"}
+              {adminBusy === "clearAuditLog" ? "Resettingâ€¦" : "Reset Audit Logs"}
             </button>
           </div>
         </section>
@@ -394,7 +391,7 @@ export function AuditorPage() {
         {tab === "audit" && (
           <>
             {loading ? (
-              <p className="muted">Loading…</p>
+              <p className="muted">Loadingâ€¦</p>
             ) : rows.length === 0 ? (
               <p className="muted">No audit entries yet.</p>
             ) : (
@@ -425,11 +422,11 @@ export function AuditorPage() {
                               <td className="mono small">
                                 {r.action}{" "}
                                 <span className="muted small">
-                                  · {r.entity}
+                                  Â· {r.entity}
                                   {r.entity_id ? ` #${r.entity_id}` : ""}
                                 </span>
                               </td>
-                              <td className="muted small">{summary || "—"}</td>
+                              <td className="muted small">{summary || "â€”"}</td>
                               <td>
                                 <button
                                   type="button"
@@ -446,8 +443,8 @@ export function AuditorPage() {
                                   <div className="ui-card ui-card--padded audit-detail-card" style={{ margin: "0.5rem 0" }}>
                                     <div className="row-actions" style={{ justifyContent: "space-between" }}>
                                       <div className="muted small">
-                                        <strong>Event</strong>: <span className="mono">{r.action}</span> ·{" "}
-                                        <strong>Actor</strong>: <span className="mono">{r.actor}</span> ·{" "}
+                                        <strong>Event</strong>: <span className="mono">{r.action}</span> Â·{" "}
+                                        <strong>Actor</strong>: <span className="mono">{r.actor}</span> Â·{" "}
                                         <strong>When</strong>: <span className="mono">{r.created_at}</span>
                                       </div>
                                       <div className="muted small">
@@ -473,30 +470,30 @@ export function AuditorPage() {
                                               >
                                                 <div className="audit-line-card__row">
                                                   <strong>MO</strong>
-                                                  <span className="mono">{ln?.manufacturing_order_id ?? "—"}</span>
+                                                  <span className="mono">{ln?.manufacturing_order_id ?? "â€”"}</span>
                                                 </div>
                                                 <div className="audit-line-card__row">
                                                   <strong>Component</strong>
                                                   <span className="mono">
-                                                    {ln?.component_part_id ?? "—"} rev {ln?.component_part_revision_id ?? "—"}
+                                                    {ln?.component_part_id ?? "â€”"} rev {ln?.component_part_revision_id ?? "â€”"}
                                                   </span>
                                                 </div>
                                                 <div className="audit-line-card__row">
                                                   <strong>Requested qty</strong>
-                                                  <span>{ln?.requested_quantity ?? "—"}</span>
+                                                  <span>{ln?.requested_quantity ?? "â€”"}</span>
                                                 </div>
                                                 <div className="audit-line-card__row">
                                                   <strong>To-issue info</strong>
-                                                  <span>{ln?.to_issue_quantity ?? "—"}</span>
+                                                  <span>{ln?.to_issue_quantity ?? "â€”"}</span>
                                                 </div>
                                                 <div className="audit-line-card__row">
                                                   <strong>MO status</strong>
-                                                  <span className="mono small">{ln?.mo_status_code_description ?? "—"}</span>
+                                                  <span className="mono small">{ln?.mo_status_code_description ?? "â€”"}</span>
                                                 </div>
                                                 <div className="audit-line-card__row">
                                                   <strong>Inventory part</strong>
                                                   <span className="mono small">
-                                                    {ln?.part_id ?? "—"} rev {ln?.part_revision_id ?? "—"}
+                                                    {ln?.part_id ?? "â€”"} rev {ln?.part_revision_id ?? "â€”"}
                                                   </span>
                                                 </div>
                                               </div>
@@ -568,7 +565,7 @@ export function AuditorPage() {
               {fileName && <div className="muted small">Selected: {fileName}</div>}
             </label>
             <button type="button" className="btn btn--primary" disabled={importing} onClick={runImport}>
-              {importing ? "Importing…" : importTarget === "mo" ? "Import MO" : "Import Inventory"}
+              {importing ? "Importingâ€¦" : importTarget === "mo" ? "Import MO" : "Import Inventory"}
             </button>
             {importResult && (
               <p className="banner banner--success" style={{ marginTop: "0.75rem" }}>

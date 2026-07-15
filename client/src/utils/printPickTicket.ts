@@ -1,7 +1,7 @@
 import type { PickTicket, PickTicketLine } from "../types";
 
-function escapeHtml(s: string) {
-  return s
+function escapeHtml(value: unknown) {
+  return String(value ?? "")
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")

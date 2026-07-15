@@ -38,6 +38,7 @@ db.exec(`
     part_id TEXT NOT NULL,
     part_revision_id TEXT NOT NULL,
     item_description TEXT NOT NULL DEFAULT '',
+    part_id_item_description TEXT NOT NULL DEFAULT '',
     on_hand_quantity REAL NOT NULL CHECK (on_hand_quantity >= 0),
     inventory_abbreviation_code TEXT NOT NULL,
     default_inventory_location_id TEXT NOT NULL,
@@ -48,6 +49,7 @@ db.exec(`
     component_part_id_item_description TEXT NOT NULL DEFAULT '',
     to_issue_quantity REAL NOT NULL CHECK (to_issue_quantity >= 0),
     mo_status_code_description TEXT NOT NULL,
+    is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
 
@@ -225,6 +227,22 @@ function migrate() {
        ADD COLUMN component_part_id_item_description TEXT NOT NULL DEFAULT ''`,
     );
   }
+  if (invCols.length > 0 && !invCols.includes("part_id_item_description")) {
+    db.exec(`ALTER TABLE inventory_parts ADD COLUMN part_id_item_description TEXT NOT NULL DEFAULT ''`);
+    db.exec(
+      `UPDATE inventory_parts
+       SET part_id_item_description =
+         CASE
+           WHEN trim(part_id) <> '' AND trim(item_description) <> ''
+             THEN part_id || ' - ' || item_description
+           ELSE trim(part_id || ' ' || item_description)
+         END
+       WHERE trim(part_id_item_description) = ''`,
+    );
+  }
+  if (invCols.length > 0 && !invCols.includes("is_active")) {
+    db.exec(`ALTER TABLE inventory_parts ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1`);
+  }
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS notifications (
@@ -303,6 +321,7 @@ export function listParts() {
          part_id,
          part_revision_id,
          item_description,
+         part_id_item_description,
          on_hand_quantity,
          inventory_abbreviation_code,
          default_inventory_location_id,
@@ -317,10 +336,13 @@ export function listParts() {
          updated_at
        FROM inventory_parts
        WHERE
-         trim(manufacturing_order_id) <> ''
-         OR NOT EXISTS (
-           SELECT 1 FROM inventory_parts mo_rows
-           WHERE trim(mo_rows.manufacturing_order_id) <> ''
+         is_active = 1
+         AND (
+           trim(manufacturing_order_id) <> ''
+           OR NOT EXISTS (
+             SELECT 1 FROM inventory_parts mo_rows
+             WHERE mo_rows.is_active = 1 AND trim(mo_rows.manufacturing_order_id) <> ''
+           )
          )
        ORDER BY manufacturing_order_id, component_part_id, part_id, part_revision_id`,
     )
@@ -330,13 +352,13 @@ export function listParts() {
 export function resetInventory({ actor } = {}) {
   const a = String(actor ?? "").trim() || "unknown";
   const tx = db.transaction(() => {
-    const before = db.prepare("SELECT COUNT(*) AS c FROM inventory_parts").get().c;
+    const before = db.prepare("SELECT COUNT(*) AS c FROM inventory_parts WHERE is_active = 1").get().c;
     const pickTicketsBefore = db.prepare("SELECT COUNT(*) AS c FROM pick_tickets").get().c;
     const pickTicketLinesBefore = db.prepare("SELECT COUNT(*) AS c FROM pick_ticket_lines").get().c;
-    db.exec("DELETE FROM pick_ticket_lines;");
-    db.exec("DELETE FROM pick_tickets;");
-    db.exec("DELETE FROM inventory_parts;");
-    const after = db.prepare("SELECT COUNT(*) AS c FROM inventory_parts").get().c;
+    // Keep ticket-linked rows so queued tickets remain readable. Imports
+    // reactivate matching identities; stale rows stay hidden from new requests.
+    db.exec("UPDATE inventory_parts SET is_active = 0;");
+    const after = db.prepare("SELECT COUNT(*) AS c FROM inventory_parts WHERE is_active = 1").get().c;
     appendAudit({
       actor: a,
       action: "inventory_reset",
@@ -345,15 +367,15 @@ export function resetInventory({ actor } = {}) {
       payload: {
         before_count: before,
         after_count: after,
-        pick_tickets_deleted: pickTicketsBefore,
-        pick_ticket_lines_deleted: pickTicketLinesBefore,
+        pick_tickets_preserved: pickTicketsBefore,
+        pick_ticket_lines_preserved: pickTicketLinesBefore,
       },
     });
     return {
       before_count: before,
       after_count: after,
-      pick_tickets_deleted: pickTicketsBefore,
-      pick_ticket_lines_deleted: pickTicketLinesBefore,
+      pick_tickets_preserved: pickTicketsBefore,
+      pick_ticket_lines_preserved: pickTicketLinesBefore,
     };
   });
   return tx();
@@ -605,7 +627,15 @@ export function getPickTicket(id) {
          l.inventory_part_id,
          l.requested_quantity,
          l.lot_number,
-         COALESCE(NULLIF(trim(p.part_id), ''), p.component_part_id) AS part_id,
+         COALESCE(
+           NULLIF(trim(p.part_id_item_description), ''),
+           CASE
+             WHEN trim(p.part_id) <> '' AND trim(p.item_description) <> ''
+               THEN p.part_id || ' - ' || p.item_description
+           END,
+           NULLIF(trim(p.part_id), ''),
+           p.component_part_id
+         ) AS part_id,
          COALESCE(NULLIF(trim(p.part_revision_id), ''), NULLIF(trim(p.component_part_revision_id), '')) AS part_revision_id,
          p.item_description,
          p.on_hand_quantity,
@@ -668,7 +698,7 @@ export function createPickTicket({ requester_name, request_type, lines }) {
        VALUES (?,?,?,?)`,
     );
     const invRow = db.prepare(
-      `SELECT id, lot_number FROM inventory_parts WHERE id = ?`,
+      `SELECT id, lot_number FROM inventory_parts WHERE id = ? AND is_active = 1`,
     );
     for (const ln of normalized) {
       const inv = invRow.get(ln.inventory_part_id);
@@ -1157,7 +1187,14 @@ function rowsToInventoryRecords(rows) {
     };
     const part_id = get("part_id");
     const part_revision_id = get("part_revision_id");
-    const item_description = get("item_description") || get("part_id_item_description");
+    const part_id_item_description = get("part_id_item_description");
+    let item_description = get("item_description");
+    if (!item_description && part_id_item_description) {
+      const prefix = `${part_id} -`;
+      item_description = part_id_item_description.toLowerCase().startsWith(prefix.toLowerCase())
+        ? part_id_item_description.slice(prefix.length).trim()
+        : part_id_item_description;
+    }
     const onHandIndex = idx("on_hand_quantity");
     const on_hand_quantity =
       onHandIndex === -1 ? 0 : parseImportQuantity(row[onHandIndex], r + 1, "on_hand_quantity");
@@ -1177,6 +1214,9 @@ function rowsToInventoryRecords(rows) {
       part_id,
       part_revision_id,
       item_description,
+      part_id_item_description:
+        part_id_item_description ||
+        (part_id && item_description ? `${part_id} - ${item_description}` : part_id || item_description),
       on_hand_quantity,
       inventory_abbreviation_code,
       default_inventory_location_id,
@@ -1253,12 +1293,13 @@ function csvEscape(value) {
 }
 
 function syncMoRowsToInventoryParts() {
-  const before = db.prepare("SELECT COUNT(*) AS c FROM inventory_parts WHERE trim(manufacturing_order_id) <> ''").get().c;
+  const before = db.prepare("SELECT COUNT(*) AS c FROM inventory_parts WHERE is_active = 1 AND trim(manufacturing_order_id) <> ''").get().c;
   db.exec(`
     INSERT INTO inventory_parts (
       part_id,
       part_revision_id,
       item_description,
+      part_id_item_description,
       on_hand_quantity,
       inventory_abbreviation_code,
       default_inventory_location_id,
@@ -1269,12 +1310,14 @@ function syncMoRowsToInventoryParts() {
       component_part_id_item_description,
       to_issue_quantity,
       mo_status_code_description,
+      is_active,
       updated_at
     )
     SELECT
       inv.part_id,
       inv.part_revision_id,
-      COALESCE(NULLIF(trim(mo.item_description), ''), inv.item_description),
+      COALESCE(NULLIF(trim(inv.item_description), ''), mo.item_description),
+      inv.part_id_item_description,
       inv.on_hand_quantity,
       inv.inventory_abbreviation_code,
       inv.default_inventory_location_id,
@@ -1292,11 +1335,13 @@ function syncMoRowsToInventoryParts() {
       ),
       mo.to_issue_quantity,
       mo.mo_status_code_description,
+      1,
       datetime('now')
     FROM manufacturing_orders mo
     JOIN inventory_parts inv
       ON trim(inv.manufacturing_order_id) = ''
      AND trim(inv.component_part_id) = ''
+     AND inv.is_active = 1
      AND inv.part_id = mo.component_part_id
     WHERE trim(mo.manufacturing_order_id) <> ''
       AND trim(mo.component_part_id) <> ''
@@ -1316,9 +1361,10 @@ function syncMoRowsToInventoryParts() {
       inventory_abbreviation_code = excluded.inventory_abbreviation_code,
       default_inventory_location_id = excluded.default_inventory_location_id,
       to_issue_quantity = excluded.to_issue_quantity,
+      is_active = 1,
       updated_at = datetime('now')
   `);
-  const after = db.prepare("SELECT COUNT(*) AS c FROM inventory_parts WHERE trim(manufacturing_order_id) <> ''").get().c;
+  const after = db.prepare("SELECT COUNT(*) AS c FROM inventory_parts WHERE is_active = 1 AND trim(manufacturing_order_id) <> ''").get().c;
   return { before, after, synced: after };
 }
 
@@ -1327,6 +1373,7 @@ export function exportInventoryCsv() {
     "part_id",
     "part_revision_id",
     "item_description",
+    "part_id_item_description",
     "on_hand_quantity",
     "inventory_abbreviation_code",
     "default_inventory_location_id",
@@ -1346,6 +1393,7 @@ export function exportInventoryCsv() {
         csvEscape(r.part_id),
         csvEscape(r.part_revision_id),
         csvEscape(r.item_description),
+        csvEscape(r.part_id_item_description),
         r.on_hand_quantity,
         csvEscape(r.inventory_abbreviation_code),
         csvEscape(r.default_inventory_location_id),
@@ -1376,17 +1424,19 @@ function importInventoryRecords({ actor, records, sourceFormat }) {
     ].join("\x1f");
   const upsert = db.prepare(
     `INSERT INTO inventory_parts (
-       part_id, part_revision_id, item_description, on_hand_quantity, inventory_abbreviation_code,
+       part_id, part_revision_id, item_description, part_id_item_description, on_hand_quantity, inventory_abbreviation_code,
        default_inventory_location_id, manufacturing_order_id, component_order_id,
-       component_part_id, component_part_revision_id, to_issue_quantity, mo_status_code_description, updated_at
-     ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))
+       component_part_id, component_part_revision_id, to_issue_quantity, mo_status_code_description, is_active, updated_at
+     ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))
      ON CONFLICT(part_id, part_revision_id, manufacturing_order_id, component_order_id, component_part_id, component_part_revision_id, mo_status_code_description)
      DO UPDATE SET
        on_hand_quantity = excluded.on_hand_quantity,
        item_description = excluded.item_description,
+       part_id_item_description = excluded.part_id_item_description,
        inventory_abbreviation_code = excluded.inventory_abbreviation_code,
        default_inventory_location_id = excluded.default_inventory_location_id,
        to_issue_quantity = excluded.to_issue_quantity,
+       is_active = 1,
        updated_at = datetime('now')`,
   );
 
@@ -1415,6 +1465,7 @@ function importInventoryRecords({ actor, records, sourceFormat }) {
         record.part_id,
         record.part_revision_id,
         record.item_description,
+        record.part_id_item_description,
         record.on_hand_quantity,
         record.inventory_abbreviation_code,
         record.default_inventory_location_id,
@@ -1424,6 +1475,7 @@ function importInventoryRecords({ actor, records, sourceFormat }) {
         record.component_part_revision_id,
         record.to_issue_quantity,
         record.mo_status_code_description,
+        1,
       );
       if (existingKeys.has(key)) {
         updated++;

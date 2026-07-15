@@ -91,6 +91,7 @@ function renderTicketBody(ticket: PickTicket, lotByLineId?: Record<number, strin
 }
 
 const PRINT_STYLES = `
+  @page { size: landscape; }
   * { box-sizing: border-box; }
   body { font-family: system-ui, sans-serif; margin: 1rem; color: #0f172a; }
   h1 { font-size: 1.35rem; margin: 0 0 1rem; }

@@ -4,7 +4,6 @@ export type Part = {
   part_id: string;
   part_revision_id: string;
   item_description: string;
-  part_id_item_description: string;
   on_hand_quantity: number;
   inventory_abbreviation_code: string;
   default_inventory_location_id: string;
@@ -39,7 +38,6 @@ export type PickTicketLine = {
   part_id: string;
   part_revision_id: string;
   item_description: string;
-  part_id_item_description: string;
   on_hand_quantity: number;
   inventory_abbreviation_code: string;
   default_inventory_location_id: string;

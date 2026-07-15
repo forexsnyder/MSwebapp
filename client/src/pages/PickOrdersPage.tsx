@@ -333,7 +333,7 @@ export function PickOrdersPage() {
               type="search"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="User, ticket, date, MO, part #…"
+              placeholder="User, ticket, date, MO, part #â€¦"
               aria-label="Search pick tickets"
             />
           </label>
@@ -344,7 +344,7 @@ export function PickOrdersPage() {
               disabled={loading || printingAll || tickets.length === 0}
               onClick={() => void handlePrintAll()}
             >
-              {printingAll ? "Preparing…" : `Print all (${tickets.length})`}
+              {printingAll ? "Preparingâ€¦" : `Print all (${tickets.length})`}
             </button>
           </div>
         </div>
@@ -352,7 +352,7 @@ export function PickOrdersPage() {
         {error && <p className="banner banner--error">{error}</p>}
         {success && <p className="banner banner--success">{success}</p>}
         {loading ? (
-          <p className="muted">Loading…</p>
+          <p className="muted">Loadingâ€¦</p>
         ) : tickets.length === 0 ? (
           <p className="muted">{emptyMessage}</p>
         ) : (
@@ -370,18 +370,18 @@ export function PickOrdersPage() {
                     {t.manufacturing_order_id ? (
                       <>
                         {" "}
-                        · MO <span className="mono">{t.manufacturing_order_id}</span>
+                        Â· MO <span className="mono">{t.manufacturing_order_id}</span>
                       </>
                     ) : null}
                     {queueTab === "closed" && t.closed_at ? (
                       <>
                         {" "}
-                        · <span className="mono">{t.closed_at}</span>
+                        Â· <span className="mono">{t.closed_at}</span>
                       </>
                     ) : (
                       <>
                         {" "}
-                        · <span className="mono">{t.created_at}</span>
+                        Â· <span className="mono">{t.created_at}</span>
                       </>
                     )}
                   </span>
@@ -409,34 +409,34 @@ export function PickOrdersPage() {
                   <span className={`badge badge--type badge--type-${selected.request_type}`}>
                     {requestTypeLabel(selected.request_type)}
                   </span>{" "}
-                  · Requester: <strong>{selected.requester_name}</strong> · Ordered{" "}
+                  Â· Requester: <strong>{selected.requester_name}</strong> Â· Ordered{" "}
                   <span className="mono">{selected.created_at}</span>
                 </p>
                 <p className="muted small pick-detail__mo">
                   Manufacturing Order ID:{" "}
-                  <span className="mono">{selected.manufacturing_order_id || "—"}</span>
+                  <span className="mono">{selected.manufacturing_order_id || "â€”"}</span>
                 </p>
                 {selected.request_type === "return" && selected.status === "open" && (
                   <p className="banner banner--info pick-detail__return-note">
-                    Return ticket — verify parts and quantities, then complete return to add stock back.
+                    Return ticket â€” verify parts and quantities, then complete return to add stock back.
                   </p>
                 )}
                 {selected.status === "cancelled" && (
                   <p className="muted small" style={{ margin: 0 }}>
-                    Cancelled by <strong>{selected.cancelled_by ?? "—"}</strong>{" "}
+                    Cancelled by <strong>{selected.cancelled_by ?? "â€”"}</strong>{" "}
                     {selected.cancelled_at ? (
                       <>
-                        · <span className="mono">{selected.cancelled_at}</span>
+                        Â· <span className="mono">{selected.cancelled_at}</span>
                       </>
                     ) : null}
                   </p>
                 )}
                 {selected.status === "closed" && (
                   <p className="muted small" style={{ margin: 0 }}>
-                    Closed by <strong>{selected.closed_by ?? "—"}</strong>{" "}
+                    Closed by <strong>{selected.closed_by ?? "â€”"}</strong>{" "}
                     {selected.closed_at ? (
                       <>
-                        · <span className="mono">{selected.closed_at}</span>
+                        Â· <span className="mono">{selected.closed_at}</span>
                       </>
                     ) : null}
                   </p>
@@ -449,7 +449,7 @@ export function PickOrdersPage() {
                   disabled={printing}
                   onClick={handlePrintTicket}
                 >
-                  {printing ? "Preparing…" : "Print ticket"}
+                  {printing ? "Preparingâ€¦" : "Print ticket"}
                 </button>
                 {(selected.status === "open" || selected.status === "closed") && (
                   <input
@@ -468,7 +468,7 @@ export function PickOrdersPage() {
                     disabled={reopening}
                     onClick={() => void reopenTicket()}
                   >
-                    {reopening ? "Reopening…" : "Reopen ticket"}
+                    {reopening ? "Reopeningâ€¦" : "Reopen ticket"}
                   </button>
                 )}
                 {selected.status === "open" && (
@@ -479,7 +479,7 @@ export function PickOrdersPage() {
                       disabled={cancelling || closing || reopening}
                       onClick={cancelTicket}
                     >
-                      {cancelling ? "Cancelling…" : "Cancel ticket"}
+                      {cancelling ? "Cancellingâ€¦" : "Cancel ticket"}
                     </button>
                     <button
                       type="button"
@@ -487,7 +487,7 @@ export function PickOrdersPage() {
                       disabled={closing || cancelling || reopening}
                       onClick={closeTicket}
                     >
-                      {closing ? "Completing…" : completeLabel}
+                      {closing ? "Completingâ€¦" : completeLabel}
                     </button>
                   </>
                 )}
@@ -502,8 +502,8 @@ export function PickOrdersPage() {
                 <thead>
                   <tr>
                     <th>MO#</th>
-                    <th>Part #</th>
-                    <th>Rev ID</th>
+                    <th>Part ID - Item Description</th>
+                    <th>Description</th>
                     <th>Requested</th>
                     <th>On Hand</th>
                     <th>Inv. ABBREV</th>
@@ -515,8 +515,10 @@ export function PickOrdersPage() {
                   {selected.lines.map((ln) => (
                     <tr key={ln.id}>
                       <td className="mono small">{ln.manufacturing_order_id}</td>
-                      <td className="mono small">{ln.part_id}</td>
-                      <td className="mono small">{ln.part_revision_id}</td>
+                      <td className="pick-part-description">
+                        <span className="mono small">{ln.part_id_item_description || ln.part_id}</span>
+                      </td>
+                      <td>{ln.item_description || "No item description"}</td>
                       <td>{ln.requested_quantity}</td>
                       <td>{ln.on_hand_quantity}</td>
                       <td className="mono small">{ln.inventory_abbreviation_code}</td>

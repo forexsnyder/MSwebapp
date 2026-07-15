@@ -14,8 +14,8 @@ export function formatTicketRef(id: number) {
 
 const PICK_LINE_HEADERS = [
   "MO#",
-  "Part #",
-  "Rev ID",
+  "Part ID - Item Description",
+  "Description",
   "Requested",
   "On Hand",
   "Inv. ABBREV",
@@ -38,8 +38,8 @@ function renderPickLineRow(ln: PickTicketLine, lotDisplay: string) {
   return `
     <tr>
       <td class="mono">${escapeHtml(ln.manufacturing_order_id)}</td>
-      <td class="mono">${escapeHtml(ln.part_id)}</td>
-      <td class="mono">${escapeHtml(ln.part_revision_id)}</td>
+      <td class="part-description">${escapeHtml(ln.part_id_item_description || ln.part_id)}</td>
+      <td>${escapeHtml(ln.item_description || "No item description")}</td>
       <td>${ln.requested_quantity}</td>
       <td>${ln.on_hand_quantity}</td>
       <td class="mono">${escapeHtml(ln.inventory_abbreviation_code)}</td>
@@ -67,12 +67,12 @@ function renderLinesTable(
 
 function renderTicketBody(ticket: PickTicket, lotByLineId?: Record<number, string>) {
   const typeLabel = ticket.request_type.toUpperCase();
-  const mo = ticket.manufacturing_order_id || "—";
+  const mo = ticket.manufacturing_order_id || "â€”";
   const statusExtra =
     ticket.status === "closed" && ticket.closed_by
-      ? ` · <strong>Picked by:</strong> ${escapeHtml(ticket.closed_by)} · <strong>Closed:</strong> ${escapeHtml(ticket.closed_at ?? "—")}`
+      ? ` Â· <strong>Picked by:</strong> ${escapeHtml(ticket.closed_by)} Â· <strong>Closed:</strong> ${escapeHtml(ticket.closed_at ?? "â€”")}`
       : ticket.status === "cancelled"
-        ? ` · <strong>Cancelled by:</strong> ${escapeHtml(ticket.cancelled_by ?? "—")}`
+        ? ` Â· <strong>Cancelled by:</strong> ${escapeHtml(ticket.cancelled_by ?? "â€”")}`
         : "";
 
   const linesTable = renderLinesTable(ticket.lines, ticket.status, lotByLineId);
@@ -81,9 +81,9 @@ function renderTicketBody(ticket: PickTicket, lotByLineId?: Record<number, strin
   <article class="pick-ticket-print">
     <h2>${escapeHtml(formatTicketRef(ticket.id))}</h2>
     <p class="meta">
-      <strong>Type:</strong> ${escapeHtml(typeLabel)} ·
-      <strong>MO:</strong> <span class="mono">${escapeHtml(mo)}</span> ·
-      <strong>Requester:</strong> ${escapeHtml(ticket.requester_name)} ·
+      <strong>Type:</strong> ${escapeHtml(typeLabel)} Â·
+      <strong>MO:</strong> <span class="mono">${escapeHtml(mo)}</span> Â·
+      <strong>Requester:</strong> ${escapeHtml(ticket.requester_name)} Â·
       <strong>Created:</strong> ${escapeHtml(ticket.created_at)}${statusExtra}
     </p>
     ${linesTable}
@@ -103,6 +103,7 @@ const PRINT_STYLES = `
   th, td { border: 1px solid #cbd5e1; padding: 0.4rem 0.5rem; text-align: left; vertical-align: middle; }
   th { background: #e2e8f0; font-size: 0.8rem; }
   .mono { font-family: ui-monospace, monospace; font-size: 0.8rem; }
+  .part-description { min-width: 10rem; overflow-wrap: anywhere; }
   .lot-blank {
     min-width: 5rem;
     min-height: 2rem;
@@ -118,7 +119,7 @@ const PRINT_STYLES = `
 
 let printFrame: HTMLIFrameElement | null = null;
 
-/** Print via a hidden iframe — avoids pop-up blockers and blank tabs. */
+/** Print via a hidden iframe â€” avoids pop-up blockers and blank tabs. */
 function printHtmlDocument(html: string) {
   if (!printFrame) {
     printFrame = document.createElement("iframe");

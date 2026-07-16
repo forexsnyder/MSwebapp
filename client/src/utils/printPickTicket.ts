@@ -14,13 +14,13 @@ export function formatTicketRef(id: number) {
 
 const PICK_LINE_HEADERS = [
   "MO#",
-  "Part #",
-  "Rev ID",
+  "Part ID - Item Description",
+  "Description",
   "Requested",
   "On Hand",
   "Inv. ABBREV",
   "Location",
-  "Lot #",
+  "Lot # / Qty Issued",
 ] as const;
 
 function lotDisplayForLine(
@@ -34,17 +34,17 @@ function lotDisplayForLine(
   return lotByLineId?.[ln.id] ?? ln.lot_number?.trim() ?? "";
 }
 
-function renderPickLineRow(ln: PickTicketLine, lotDisplay: string) {
+function renderPickLineRow(ln: PickTicketLine, lotDisplayHtml: string) {
   return `
     <tr>
       <td class="mono">${escapeHtml(ln.manufacturing_order_id)}</td>
-      <td class="mono">${escapeHtml(ln.part_id)}</td>
-      <td class="mono">${escapeHtml(ln.part_revision_id)}</td>
+      <td class="part-description">${escapeHtml(ln.part_id_item_description || ln.part_id)}</td>
+      <td>${escapeHtml(ln.item_description || "No item description")}</td>
       <td>${ln.requested_quantity}</td>
       <td>${ln.on_hand_quantity}</td>
       <td class="mono">${escapeHtml(ln.inventory_abbreviation_code)}</td>
       <td class="mono">${escapeHtml(ln.default_inventory_location_id)}</td>
-      <td class="lot-blank">${escapeHtml(lotDisplay)}</td>
+      <td class="lot-blank">${lotDisplayHtml}</td>
     </tr>`;
 }
 
@@ -52,10 +52,25 @@ function renderLinesTable(
   lines: PickTicketLine[],
   ticketStatus: PickTicket["status"],
   lotByLineId?: Record<number, string>,
+  lotOptionsByLineId?: Record<number, string[]>,
+  lotQuantitiesByLineId?: Record<number, Record<string, string>>,
 ) {
   const headerRow = PICK_LINE_HEADERS.map((h) => `<th>${escapeHtml(h)}</th>`).join("");
   const bodyRows = lines
-    .map((ln) => renderPickLineRow(ln, lotDisplayForLine(ln, ticketStatus, lotByLineId)))
+    .map((ln) => {
+      const lotOptions = lotOptionsByLineId?.[ln.id] ?? [];
+      const quantities = lotQuantitiesByLineId?.[ln.id] ?? {};
+      const lotDisplayHtml =
+        ticketStatus === "open" && lotOptions.length > 0
+          ? `<div class="lot-list">${lotOptions
+              .map(
+                (lot) =>
+                  `<div class="lot-row"><span class="mono">${escapeHtml(lot)}</span><span class="lot-qty-box">${escapeHtml(quantities[lot] ?? "")}</span></div>`,
+              )
+              .join("")}</div>`
+          : escapeHtml(lotDisplayForLine(ln, ticketStatus, lotByLineId));
+      return renderPickLineRow(ln, lotDisplayHtml);
+    })
     .join("");
 
   return `
@@ -65,7 +80,12 @@ function renderLinesTable(
     </table>`;
 }
 
-function renderTicketBody(ticket: PickTicket, lotByLineId?: Record<number, string>) {
+function renderTicketBody(
+  ticket: PickTicket,
+  lotByLineId?: Record<number, string>,
+  lotOptionsByLineId?: Record<number, string[]>,
+  lotQuantitiesByLineId?: Record<number, Record<string, string>>,
+) {
   const typeLabel = ticket.request_type.toUpperCase();
   const mo = ticket.manufacturing_order_id || "—";
   const statusExtra =
@@ -75,7 +95,13 @@ function renderTicketBody(ticket: PickTicket, lotByLineId?: Record<number, strin
         ? ` · <strong>Cancelled by:</strong> ${escapeHtml(ticket.cancelled_by ?? "—")}`
         : "";
 
-  const linesTable = renderLinesTable(ticket.lines, ticket.status, lotByLineId);
+  const linesTable = renderLinesTable(
+    ticket.lines,
+    ticket.status,
+    lotByLineId,
+    lotOptionsByLineId,
+    lotQuantitiesByLineId,
+  );
 
   return `
   <article class="pick-ticket-print">
@@ -104,11 +130,15 @@ const PRINT_STYLES = `
   th, td { border: 1px solid #cbd5e1; padding: 0.4rem 0.5rem; text-align: left; vertical-align: middle; }
   th { background: #e2e8f0; font-size: 0.8rem; }
   .mono { font-family: ui-monospace, monospace; font-size: 0.8rem; }
+  .part-description { min-width: 10rem; overflow-wrap: anywhere; }
   .lot-blank {
     min-width: 5rem;
     min-height: 2rem;
     background: #fff;
   }
+  .lot-list { display: grid; gap: 0.3rem; min-width: 8rem; }
+  .lot-row { display: grid; grid-template-columns: minmax(2.5rem, 1fr) 3.5rem; align-items: center; gap: 0.45rem; }
+  .lot-qty-box { display: block; min-width: 3.5rem; min-height: 1.65rem; padding: 0.2rem; border: 1.5px solid #64748b; border-radius: 0.2rem; background: #fff; }
   @media print {
     body { margin: 0.5in; }
     .pick-ticket-print { page-break-after: always; border-bottom: none; }
@@ -158,6 +188,9 @@ export type PrintPickTicketOptions = {
   autoPrint?: boolean;
   /** Per-line lot values (e.g. from picker handwrite fields). Open tickets print blank lots when omitted. */
   lotByLineId?: Record<number, string>;
+  /** Available lots and optional entered quantities for rendering picker boxes on open tickets. */
+  lotOptionsByLineId?: Record<number, string[]>;
+  lotQuantitiesByLineId?: Record<number, Record<string, string>>;
 };
 
 export function printPickTicket(ticket: PickTicket, options: PrintPickTicketOptions = {}) {
@@ -165,14 +198,22 @@ export function printPickTicket(ticket: PickTicket, options: PrintPickTicketOpti
 }
 
 export function printPickTickets(tickets: PickTicket[], options: PrintPickTicketOptions = {}) {
-  const { title, autoPrint = true, lotByLineId } = options;
+  const {
+    title,
+    autoPrint = true,
+    lotByLineId,
+    lotOptionsByLineId,
+    lotQuantitiesByLineId,
+  } = options;
   if (tickets.length === 0) {
     throw new Error("No tickets to print.");
   }
 
   const docTitle = title ?? (tickets.length === 1 ? formatTicketRef(tickets[0].id) : `${tickets.length} pick tickets`);
   const heading = tickets.length === 1 ? "" : `<h1>${escapeHtml(docTitle)}</h1>`;
-  const bodies = tickets.map((t) => renderTicketBody(t, lotByLineId)).join("");
+  const bodies = tickets
+    .map((t) => renderTicketBody(t, lotByLineId, lotOptionsByLineId, lotQuantitiesByLineId))
+    .join("");
 
   const html = `<!DOCTYPE html>
 <html>

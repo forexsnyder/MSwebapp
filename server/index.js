@@ -23,6 +23,7 @@ import {
   listUserPickTicketHistory,
   listNotifications,
   markNotificationsRead,
+  listLotsForInventoryPart,
   listParts,
   resetDatabase,
   resetInventory,
@@ -93,6 +94,19 @@ app.get("/api/health", (_req, res) => {
 
 app.get("/api/parts", (_req, res) => {
   res.json(listParts());
+});
+
+app.get("/api/inventory-parts/:id/lots", (req, res) => {
+  try {
+    const rows = listLotsForInventoryPart(req.params.id);
+    if (rows === null) {
+      res.status(404).json({ error: "inventory part not found" });
+      return;
+    }
+    res.json(rows);
+  } catch (e) {
+    res.status(400).json({ error: e.message || "could not load lots" });
+  }
 });
 
 app.get("/api/pick-tickets", (req, res) => {
@@ -218,6 +232,7 @@ app.post("/api/pick-tickets/:id/close", (req, res) => {
     const row = closePickTicket(id, {
       picker_name: req.body?.picker_name,
       line_lots: req.body?.line_lots,
+      line_lot_issues: req.body?.line_lot_issues,
     });
     if (!row) {
       res.status(404).json({ error: "not found" });

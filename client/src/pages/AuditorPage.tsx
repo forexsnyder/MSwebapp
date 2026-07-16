@@ -174,7 +174,7 @@ export function AuditorPage() {
     setError(null);
     setAdminBanner(null);
     const ok = window.confirm(
-      "Reset inventory database?\n\nThis will delete all inventory rows. No test inventory will be added back.",
+      "Reset active inventory?\n\nThis will clear the active inventory catalog. Existing pick tickets and their line details will be preserved.",
     );
     if (!ok) return;
     setAdminBusy("resetInventory");
@@ -192,13 +192,10 @@ export function AuditorPage() {
     const body = (await res.json()) as {
       before_count: number;
       after_count: number;
-      pick_tickets_deleted?: number;
-      pick_ticket_lines_deleted?: number;
+      pick_tickets_preserved?: number;
+      pick_ticket_lines_preserved?: number;
     };
-    const ticketText =
-      body.pick_tickets_deleted || body.pick_ticket_lines_deleted
-        ? ` Cleared ${body.pick_tickets_deleted ?? 0} related ticket(s) and ${body.pick_ticket_lines_deleted ?? 0} ticket line(s).`
-        : "";
+    const ticketText = ` Preserved ${body.pick_tickets_preserved ?? 0} ticket(s) and ${body.pick_ticket_lines_preserved ?? 0} ticket line(s).`;
     setAdminBanner(`Inventory reset: ${body.before_count} → ${body.after_count} row(s).${ticketText}`);
     await load();
   }

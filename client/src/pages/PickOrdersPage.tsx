@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAuth } from "../auth/AuthContext";
-import type { PickTicket, PickTicketSummary, RequestType } from "../types";
+import type { InventoryLot, PickTicket, PickTicketLine, PickTicketSummary, RequestType } from "../types";
 import { printPickTicket, printPickTickets } from "../utils/printPickTicket";
 
 type QueueTab = "open" | "closed";
@@ -33,6 +33,8 @@ export function PickOrdersPage() {
   const [success, setSuccess] = useState<string | null>(null);
   const [pickerName, setPickerName] = useState("");
   const [lineLots, setLineLots] = useState<Record<number, string>>({});
+  const [lineLotOptions, setLineLotOptions] = useState<Record<number, InventoryLot[]>>({});
+  const [lineLotQuantities, setLineLotQuantities] = useState<Record<number, Record<string, string>>>({});
   const [closing, setClosing] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const [reopening, setReopening] = useState(false);
@@ -90,17 +92,36 @@ export function PickOrdersPage() {
     const ticket = (await res.json()) as PickTicket;
     setSelected(ticket);
     const lots: Record<number, string> = {};
+    const lotOptions: Record<number, InventoryLot[]> = {};
+    const lotQuantities: Record<number, Record<string, string>> = {};
     for (const ln of ticket.lines) {
       lots[ln.id] =
         ticket.status === "open" ? "" : ln.lot_number || ln.inventory_lot_number || "";
+      if (ticket.status === "open") {
+        const lotRes = await fetch(`/api/inventory-parts/${ln.inventory_part_id}/lots`);
+        lotOptions[ln.id] = lotRes.ok ? ((await lotRes.json()) as InventoryLot[]) : [];
+        lotQuantities[ln.id] = {};
+      } else {
+        lotOptions[ln.id] = (ln.lot_issues ?? []).map((issue) => ({
+          lot_number: issue.lot_number,
+          on_hand_quantity: 0,
+        }));
+        lotQuantities[ln.id] = Object.fromEntries(
+          (ln.lot_issues ?? []).map((issue) => [issue.lot_number, String(issue.issued_quantity)]),
+        );
+      }
     }
     setLineLots(lots);
+    setLineLotOptions(lotOptions);
+    setLineLotQuantities(lotQuantities);
   }, []);
 
   useEffect(() => {
     if (selectedId == null) {
       setSelected(null);
       setLineLots({});
+      setLineLotOptions({});
+      setLineLotQuantities({});
       return;
     }
     void loadSelected(selectedId);
@@ -130,6 +151,27 @@ export function PickOrdersPage() {
       return;
     }
     if (selected.status !== "open") return;
+    const lineLotIssues = selected.lines.flatMap((ln) => {
+      const quantities = lineLotQuantities[ln.id] ?? {};
+      return (lineLotOptions[ln.id] ?? [])
+        .map((lot) => ({
+          line_id: ln.id,
+          lot_number: lot.lot_number,
+          issued_quantity: Number(quantities[lot.lot_number] || 0),
+        }))
+        .filter((issue) => issue.issued_quantity > 0);
+    });
+    for (const ln of selected.lines) {
+      const issuedTotal = lineLotIssues
+        .filter((issue) => issue.line_id === ln.id)
+        .reduce((sum, issue) => sum + issue.issued_quantity, 0);
+      if (issuedTotal !== ln.requested_quantity) {
+        setError(
+          `Issued quantities for ${ln.part_id} must total the requested quantity (${ln.requested_quantity}).`,
+        );
+        return;
+      }
+    }
     setClosing(true);
     setError(null);
     setSuccess(null);
@@ -142,6 +184,7 @@ export function PickOrdersPage() {
           line_id: ln.id,
           lot_number: lineLots[ln.id] ?? ln.lot_number,
         })),
+        line_lot_issues: lineLotIssues,
       }),
     });
     setClosing(false);
@@ -151,7 +194,7 @@ export function PickOrdersPage() {
       return;
     }
     const updated = (await res.json()) as PickTicket;
-    setSelected(updated);
+    await loadSelected(updated.id);
     await loadList();
     setSuccess(
       `Ticket completed. ${updated.requester_name} was notified that this order was picked.`,
@@ -224,13 +267,18 @@ export function PickOrdersPage() {
     setQueueTab("open");
     setSelectedId(updated.id);
     await loadList("open");
-    setSelected(updated);
-    const lots: Record<number, string> = {};
-    for (const ln of updated.lines) {
-      lots[ln.id] = "";
-    }
-    setLineLots(lots);
+    await loadSelected(updated.id);
     setSuccess(`Ticket reopened and moved to the Open queue.`);
+  }
+
+  function lotSummaryForLine(ln: PickTicketLine) {
+    const quantities = lineLotQuantities[ln.id] ?? {};
+    const entered = (lineLotOptions[ln.id] ?? [])
+      .map((lot) => ({ lot: lot.lot_number, quantity: Number(quantities[lot.lot_number] || 0) }))
+      .filter((row) => row.quantity > 0)
+      .map((row) => `${row.lot} (${row.quantity})`)
+      .join(", ");
+    return entered || lineLots[ln.id] || ln.lot_number || "";
   }
 
   function ticketForPrint(ticket: PickTicket): PickTicket {
@@ -239,7 +287,7 @@ export function PickOrdersPage() {
       ...ticket,
       lines: ticket.lines.map((ln) => ({
         ...ln,
-        lot_number: lineLots[ln.id] ?? ln.lot_number,
+        lot_number: lotSummaryForLine(ln),
       })),
     };
   }
@@ -260,7 +308,14 @@ export function PickOrdersPage() {
     setPrinting(true);
     try {
       printPickTicket(ticketForPrint(selected), {
-        lotByLineId: Object.fromEntries(selected.lines.map((ln) => [ln.id, lineLots[ln.id] ?? ""])),
+        lotByLineId: Object.fromEntries(selected.lines.map((ln) => [ln.id, lotSummaryForLine(ln)])),
+        lotOptionsByLineId: Object.fromEntries(
+          selected.lines.map((ln) => [
+            ln.id,
+            (lineLotOptions[ln.id] ?? []).map((lot) => lot.lot_number),
+          ]),
+        ),
+        lotQuantitiesByLineId: lineLotQuantities,
       });
     } catch (e) {
       setError(e instanceof Error ? e.message : "Print failed.");
@@ -286,8 +341,17 @@ export function PickOrdersPage() {
         {
           title: `${label} (${printable.length})`,
           lotByLineId: selected
-            ? Object.fromEntries(selected.lines.map((ln) => [ln.id, lineLots[ln.id] ?? ""]))
+            ? Object.fromEntries(selected.lines.map((ln) => [ln.id, lotSummaryForLine(ln)]))
             : undefined,
+          lotOptionsByLineId: selected
+            ? Object.fromEntries(
+                selected.lines.map((ln) => [
+                  ln.id,
+                  (lineLotOptions[ln.id] ?? []).map((lot) => lot.lot_number),
+                ]),
+              )
+            : undefined,
+          lotQuantitiesByLineId: selected ? lineLotQuantities : undefined,
         },
       );
     } catch (e) {
@@ -295,6 +359,61 @@ export function PickOrdersPage() {
     } finally {
       setPrintingAll(false);
     }
+  }
+
+  function renderLotIssues(ln: PickTicketLine) {
+    if (selected?.status !== "open") {
+      if (ln.lot_issues?.length) {
+        return (
+          <div className="pick-lot-issue-list pick-lot-issue-list--readonly">
+            {ln.lot_issues.map((issue) => (
+              <div className="pick-lot-issue-row" key={issue.lot_number}>
+                <span className="mono small">{issue.lot_number}</span>
+                <strong>{issue.issued_quantity}</strong>
+              </div>
+            ))}
+          </div>
+        );
+      }
+      return (
+        <div className="pick-lot-handwrite pick-lot-handwrite--readonly">
+          {lineLots[ln.id] || ln.lot_number || ""}
+        </div>
+      );
+    }
+
+    const lots = lineLotOptions[ln.id] ?? [];
+    if (lots.length === 0) {
+      return null;
+    }
+
+    return (
+      <div className="pick-lot-issue-list">
+        {lots.map((lot) => (
+          <label className="pick-lot-issue-row" key={lot.lot_number}>
+            <span className="mono small">{lot.lot_number}</span>
+            <input
+              type="number"
+              min={0}
+              step={1}
+              className="field__input pick-lot-quantity"
+              value={lineLotQuantities[ln.id]?.[lot.lot_number] ?? ""}
+              onChange={(e) =>
+                setLineLotQuantities((prev) => ({
+                  ...prev,
+                  [ln.id]: {
+                    ...(prev[ln.id] ?? {}),
+                    [lot.lot_number]: e.target.value,
+                  },
+                }))
+              }
+              placeholder=""
+              aria-label={`Quantity issued from lot ${lot.lot_number}`}
+            />
+          </label>
+        ))}
+      </div>
+    );
   }
 
   return (
@@ -502,43 +621,28 @@ export function PickOrdersPage() {
                 <thead>
                   <tr>
                     <th>MO#</th>
-                    <th>Part #</th>
-                    <th>Rev ID</th>
+                    <th>Part ID - Item Description</th>
+                    <th>Description</th>
                     <th>Requested</th>
                     <th>On Hand</th>
                     <th>Inv. ABBREV</th>
                     <th>Location</th>
-                    <th>Lot #</th>
+                    <th>Lot # / Qty Issued</th>
                   </tr>
                 </thead>
                 <tbody>
                   {selected.lines.map((ln) => (
                     <tr key={ln.id}>
                       <td className="mono small">{ln.manufacturing_order_id}</td>
-                      <td className="mono small">{ln.part_id}</td>
-                      <td className="mono small">{ln.part_revision_id}</td>
+                      <td className="pick-part-description">
+                        <span className="mono small">{ln.part_id_item_description || ln.part_id}</span>
+                      </td>
+                      <td>{ln.item_description || "No item description"}</td>
                       <td>{ln.requested_quantity}</td>
                       <td>{ln.on_hand_quantity}</td>
                       <td className="mono small">{ln.inventory_abbreviation_code}</td>
                       <td className="mono small">{ln.default_inventory_location_id}</td>
-                      <td className="pick-lot-cell">
-                        {selected.status === "open" ? (
-                          <input
-                            type="text"
-                            className="field__input pick-lot-handwrite"
-                            value={lineLots[ln.id] ?? ""}
-                            onChange={(e) =>
-                              setLineLots((prev) => ({ ...prev, [ln.id]: e.target.value }))
-                            }
-                            placeholder=""
-                            aria-label={`Lot number for ${ln.part_id} ${ln.part_revision_id}`}
-                          />
-                        ) : (
-                          <div className="pick-lot-handwrite pick-lot-handwrite--readonly">
-                            {lineLots[ln.id] || ln.lot_number || ""}
-                          </div>
-                        )}
-                      </td>
+                      <td className="pick-lot-cell">{renderLotIssues(ln)}</td>
                     </tr>
                   ))}
                 </tbody>

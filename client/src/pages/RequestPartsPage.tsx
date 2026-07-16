@@ -13,6 +13,12 @@ const REQUEST_TYPE_OPTIONS: { value: RequestType; label: string }[] = [
   { value: "return", label: "Return" },
 ];
 
+function catalogPartKey(part: Pick<Part, "part_id" | "item_description">) {
+  const partId = part.part_id.trim();
+  const description = part.item_description?.trim() || "No item description";
+  return `${partId.toLocaleLowerCase()}\u001f${description.toLocaleLowerCase()}`;
+}
+
 export function RequestPartsPage() {
   const { user } = useAuth();
   const requesterName = user?.trim() || DUMMY_REQUESTER_NAME;
@@ -27,7 +33,7 @@ export function RequestPartsPage() {
   const [selectedInventoryPartId, setSelectedInventoryPartId] = useState("");
   const [selectedMoId, setSelectedMoId] = useState("");
   const [selectedComponentPartId, setSelectedComponentPartId] = useState("");
-  const [qtyDraft, setQtyDraft] = useState("1");
+  const [qtyDraft, setQtyDraft] = useState("");
 
   useEffect(() => {
     let cancelled = false;
@@ -77,15 +83,37 @@ export function RequestPartsPage() {
     }));
   }, [cartItems]);
 
+  const selectedSearchPart = useMemo(() => {
+    if (!selectedInventoryPartId) return null;
+    return parts.find((p) => String(p.id) === selectedInventoryPartId) ?? null;
+  }, [parts, selectedInventoryPartId]);
+
+  const selectedSearchPartRows = useMemo(() => {
+    if (!selectedSearchPart) return [];
+    const selectedKey = catalogPartKey(selectedSearchPart);
+    return parts.filter((part) => catalogPartKey(part) === selectedKey);
+  }, [parts, selectedSearchPart]);
+
   const moOptions = useMemo(() => {
-    return Array.from(new Set(parts.map((p) => p.manufacturing_order_id)))
+    const sourceParts = selectedSearchPart ? selectedSearchPartRows : parts;
+    return Array.from(
+      new Set(sourceParts.map((p) => p.manufacturing_order_id).filter(Boolean)),
+    )
       .sort((a, b) => a.localeCompare(b))
       .map((mo) => ({ value: mo, label: mo }));
-  }, [parts]);
+  }, [parts, selectedSearchPart, selectedSearchPartRows]);
 
   const partSearchOptions = useMemo(() => {
-    return parts
-      .slice()
+    const uniqueParts = new Map<string, Part>();
+
+    for (const part of parts) {
+      // Inventory rows are repeated for each MO/component association. The
+      // global part search should show each visible inventory part only once.
+      const key = catalogPartKey(part);
+      if (!uniqueParts.has(key)) uniqueParts.set(key, part);
+    }
+
+    return Array.from(uniqueParts.values())
       .sort((a, b) => {
         const aLabel = `${a.part_id} ${a.item_description}`;
         const bLabel = `${b.part_id} ${b.item_description}`;
@@ -127,9 +155,14 @@ export function RequestPartsPage() {
   }, [partsForMo]);
 
   const selectedPartBySearch = useMemo(() => {
-    if (!selectedInventoryPartId) return null;
-    return parts.find((p) => String(p.id) === selectedInventoryPartId) ?? null;
-  }, [parts, selectedInventoryPartId]);
+    if (!selectedSearchPart || !selectedMoId) return null;
+    return (
+      selectedSearchPartRows
+        .filter((part) => part.manufacturing_order_id === selectedMoId)
+        .slice()
+        .sort((a, b) => a.part_revision_id.localeCompare(b.part_revision_id))[0] ?? null
+    );
+  }, [selectedMoId, selectedSearchPart, selectedSearchPartRows]);
 
   const selectedPartByMoComponent = useMemo(() => {
     if (!selectedMoId || !selectedComponentPartId) return null;
@@ -152,10 +185,8 @@ export function RequestPartsPage() {
 
   function selectInventoryPart(value: string) {
     setSelectedInventoryPartId(value);
-    const part = parts.find((p) => String(p.id) === value);
-    if (!part) return;
-    setSelectedMoId(part.manufacturing_order_id);
-    setSelectedComponentPartId(part.component_part_id);
+    setSelectedMoId("");
+    setSelectedComponentPartId("");
   }
 
   function selectMo(value: string) {
@@ -170,6 +201,10 @@ export function RequestPartsPage() {
   function addSelectedToCart() {
     setError(null);
     setCreatedTicketId(null);
+    if (selectedInventoryPartId && !selectedMoId) {
+      setError("Select the correct Manufacturing Order ID for the selected part.");
+      return;
+    }
     if (!selectedInventoryPartId && (!selectedMoId || !selectedComponentPartId)) {
       setError("Select a Manufacturing Order ID and Component Part ID, or search by Part ID / Item Description.");
       return;
@@ -188,7 +223,7 @@ export function RequestPartsPage() {
       return;
     }
     setCart((prev) => ({ ...prev, [selectedPart.id]: q }));
-    setQtyDraft("1");
+    setQtyDraft("");
     setSelectedInventoryPartId("");
     setSelectedComponentPartId("");
   }
@@ -290,8 +325,8 @@ export function RequestPartsPage() {
                     label="Manufacturing Order ID"
                     value={selectedMoId}
                     options={moOptions}
-                    placeholder="Select MO…"
-                    searchPlaceholder="Search MO IDs…"
+                    placeholder={selectedSearchPart ? "Enter the correct MO…" : "Select MO…"}
+                    searchPlaceholder="Enter or search MO IDs…"
                     onChange={selectMo}
                   />
 
@@ -299,9 +334,15 @@ export function RequestPartsPage() {
                     label="Component Part ID (for selected MO)"
                     value={selectedComponentPartId}
                     options={componentPartOptions}
-                    placeholder={selectedMoId ? "Select component part…" : "Select MO first"}
+                    placeholder={
+                      selectedSearchPart
+                        ? "Part selected below"
+                        : selectedMoId
+                          ? "Select component part…"
+                          : "Select MO first"
+                    }
                     searchPlaceholder="Search Component Part IDs…"
-                    disabled={!selectedMoId}
+                    disabled={!selectedMoId || Boolean(selectedSearchPart)}
                     onChange={selectComponentPart}
                   />
 
@@ -313,8 +354,8 @@ export function RequestPartsPage() {
                     label="Part ID or Item Description"
                     value={selectedInventoryPartId}
                     options={partSearchOptions}
-                    placeholder="Search part ID or description…"
-                    searchPlaceholder="Type part ID or item description…"
+                    placeholder="Enter part ID or description…"
+                    searchPlaceholder="Enter any part of the ID or description…"
                     onChange={selectInventoryPart}
                   />
 

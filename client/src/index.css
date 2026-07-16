@@ -1716,6 +1716,29 @@ code,
   box-sizing: border-box;
 }
 
+.pick-lot-issue-list {
+  display: grid;
+  gap: 0.45rem;
+  min-width: 12rem;
+}
+
+.pick-lot-issue-row {
+  display: grid;
+  grid-template-columns: minmax(6rem, 1fr) 5rem;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.pick-lot-quantity {
+  width: 5rem;
+  min-height: 2.4rem;
+  padding: 0.35rem 0.5rem;
+}
+
+.pick-lot-issue-list--readonly .pick-lot-issue-row {
+  padding-block: 0.2rem;
+}
+
 .badge--type {
   text-transform: capitalize;
   font-weight: 600;
@@ -1905,7 +1928,14 @@ code,
 }
 
 .data-table--wide {
-  min-width: 720px;
+  min-width: 900px;
+}
+
+.pick-part-description {
+  min-width: 12rem;
+  max-width: 22rem;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .inline-edit--stack {

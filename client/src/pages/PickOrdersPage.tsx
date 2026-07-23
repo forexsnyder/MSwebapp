@@ -161,17 +161,6 @@ export function PickOrdersPage() {
         }))
         .filter((issue) => issue.issued_quantity > 0);
     });
-    for (const ln of selected.lines) {
-      const issuedTotal = lineLotIssues
-        .filter((issue) => issue.line_id === ln.id)
-        .reduce((sum, issue) => sum + issue.issued_quantity, 0);
-      if (issuedTotal !== ln.requested_quantity) {
-        setError(
-          `Issued quantities for ${ln.part_id} must total the requested quantity (${ln.requested_quantity}).`,
-        );
-        return;
-      }
-    }
     setClosing(true);
     setError(null);
     setSuccess(null);

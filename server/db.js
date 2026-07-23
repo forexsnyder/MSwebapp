@@ -901,12 +901,6 @@ export function closePickTicket(id, { picker_name, line_lots, line_lot_issues })
     for (const ln of lines) {
       const lotIssues = lotIssuesByLineId.get(ln.id) ?? [];
       if (hasLotIssuePayload) {
-        const issuedTotal = lotIssues.reduce((sum, issue) => sum + issue.issued_quantity, 0);
-        if (issuedTotal !== Number(ln.requested_quantity)) {
-          throw new Error(
-            `lot quantities for line ${ln.id} must total requested quantity ${ln.requested_quantity}`,
-          );
-        }
         clearLotIssues.run(ln.id);
         for (const issue of lotIssues) {
           const inventory = readLotOnHand.get(

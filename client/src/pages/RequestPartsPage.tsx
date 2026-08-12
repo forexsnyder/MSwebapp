@@ -185,8 +185,6 @@ export function RequestPartsPage() {
 
   function selectInventoryPart(value: string) {
     setSelectedInventoryPartId(value);
-    setSelectedMoId("");
-    setSelectedComponentPartId("");
   }
 
   function selectMo(value: string) {

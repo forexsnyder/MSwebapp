@@ -98,6 +98,8 @@ db.exec(`
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     pick_ticket_id INTEGER NOT NULL REFERENCES pick_tickets(id) ON DELETE CASCADE,
     inventory_part_id INTEGER NOT NULL REFERENCES inventory_parts(id),
+    manufacturing_order_id TEXT NOT NULL DEFAULT '',
+    component_part_id TEXT NOT NULL DEFAULT '',
     requested_quantity INTEGER NOT NULL CHECK (requested_quantity >= 0),
     UNIQUE(pick_ticket_id, inventory_part_id)
   );
@@ -245,6 +247,12 @@ function migrate() {
   const lineCols = tableColumns("pick_ticket_lines");
   if (lineCols.length > 0 && !lineCols.includes("lot_number")) {
     db.exec(`ALTER TABLE pick_ticket_lines ADD COLUMN lot_number TEXT NOT NULL DEFAULT ''`);
+  }
+  if (lineCols.length > 0 && !lineCols.includes("manufacturing_order_id")) {
+    db.exec(`ALTER TABLE pick_ticket_lines ADD COLUMN manufacturing_order_id TEXT NOT NULL DEFAULT ''`);
+  }
+  if (lineCols.length > 0 && !lineCols.includes("component_part_id")) {
+    db.exec(`ALTER TABLE pick_ticket_lines ADD COLUMN component_part_id TEXT NOT NULL DEFAULT ''`);
   }
 
   if (invCols.length > 0 && !invCols.includes("lot_number")) {
@@ -395,6 +403,40 @@ export function listParts() {
            )
          )
        ORDER BY manufacturing_order_id, component_part_id, part_id, part_revision_id`,
+    )
+    .all();
+}
+
+export function listInventoryCatalog() {
+  return db
+    .prepare(
+      `SELECT
+         id, part_id, part_revision_id, item_description, part_id_item_description,
+         on_hand_quantity, inventory_abbreviation_code, default_inventory_location_id,
+         '' AS manufacturing_order_id, '' AS component_order_id,
+         '' AS component_part_id, '' AS component_part_revision_id,
+         '' AS component_part_id_item_description, 0 AS to_issue_quantity,
+         '' AS mo_status_code_description, lot_number, updated_at
+       FROM inventory_parts
+       WHERE is_active = 1
+         AND trim(manufacturing_order_id) = ''
+         AND trim(component_part_id) = ''
+       ORDER BY part_id, part_revision_id, lot_number`,
+    )
+    .all();
+}
+
+export function listManufacturingOrders() {
+  return db
+    .prepare(
+      `SELECT
+         id, manufacturing_order_id, component_order_id, component_part_id,
+         component_part_revision_id, part_id, part_revision_id, item_description,
+         component_part_id_item_description, to_issue_quantity,
+         mo_status_code_description, updated_at
+       FROM manufacturing_orders
+       WHERE trim(manufacturing_order_id) <> ''
+       ORDER BY manufacturing_order_id, component_part_id, component_part_revision_id`,
     )
     .all();
 }
@@ -723,9 +765,9 @@ export function getPickTicket(id) {
          p.on_hand_quantity,
          p.inventory_abbreviation_code,
          p.default_inventory_location_id,
-         p.manufacturing_order_id,
+         COALESCE(NULLIF(trim(l.manufacturing_order_id), ''), p.manufacturing_order_id) AS manufacturing_order_id,
          p.component_order_id,
-         p.component_part_id,
+         COALESCE(NULLIF(trim(l.component_part_id), ''), p.component_part_id) AS component_part_id,
          COALESCE(NULLIF(trim(p.component_part_revision_id), ''), NULLIF(trim(p.part_revision_id), '')) AS component_part_revision_id,
          p.to_issue_quantity,
          p.mo_status_code_description,
@@ -763,18 +805,35 @@ export function createPickTicket({ requester_name, request_type, lines }) {
   const normalized = lines.map((ln) => {
     const inventory_part_id = Number(ln?.inventory_part_id);
     const requested_quantity = Number(ln?.requested_quantity);
+    const manufacturing_order_id = String(ln?.manufacturing_order_id ?? "").trim();
+    const component_part_id = String(ln?.component_part_id ?? "").trim();
     if (!Number.isInteger(inventory_part_id) || inventory_part_id < 1) {
       throw new Error("invalid inventory_part_id");
     }
     if (!Number.isInteger(requested_quantity) || requested_quantity < 0) {
       throw new Error("requested_quantity must be a whole number ≥ 0");
     }
-    return { inventory_part_id, requested_quantity };
+    if (!manufacturing_order_id) throw new Error("manufacturing_order_id is required");
+    return { inventory_part_id, manufacturing_order_id, component_part_id, requested_quantity };
   });
 
-  const manufacturing_order_id = manufacturingOrderIdsForPartIds(
-    normalized.map((ln) => ln.inventory_part_id),
+  const manufacturing_order_id = [...new Set(normalized.map((ln) => ln.manufacturing_order_id))]
+    .sort((a, b) => a.localeCompare(b))
+    .join(", ");
+
+  const activeMo = db.prepare(
+    `SELECT 1
+     FROM manufacturing_orders
+     WHERE manufacturing_order_id = ?
+       AND (? = '' OR component_part_id = ?)
+       AND instr(mo_status_code_description, 'In Shop') > 0
+     LIMIT 1`,
   );
+  for (const ln of normalized) {
+    if (!activeMo.get(ln.manufacturing_order_id, ln.component_part_id, ln.component_part_id)) {
+      throw new Error(`manufacturing order is not In Shop: ${ln.manufacturing_order_id}`);
+    }
+  }
 
   const tx = db.transaction(() => {
     const info = db
@@ -784,8 +843,10 @@ export function createPickTicket({ requester_name, request_type, lines }) {
       .run(requester, requestType, manufacturing_order_id);
     const ticketId = info.lastInsertRowid;
     const insLine = db.prepare(
-      `INSERT INTO pick_ticket_lines (pick_ticket_id, inventory_part_id, requested_quantity, lot_number)
-       VALUES (?,?,?,?)`,
+      `INSERT INTO pick_ticket_lines (
+         pick_ticket_id, inventory_part_id, manufacturing_order_id,
+         component_part_id, requested_quantity, lot_number
+       ) VALUES (?,?,?,?,?,?)`,
     );
     const invRow = db.prepare(
       `SELECT id, lot_number FROM inventory_parts WHERE id = ? AND is_active = 1`,
@@ -794,7 +855,14 @@ export function createPickTicket({ requester_name, request_type, lines }) {
       const inv = invRow.get(ln.inventory_part_id);
       if (!inv) throw new Error(`inventory_part_id not found: ${ln.inventory_part_id}`);
       const lot = String(inv.lot_number ?? "").trim();
-      insLine.run(ticketId, ln.inventory_part_id, ln.requested_quantity, lot);
+      insLine.run(
+        ticketId,
+        ln.inventory_part_id,
+        ln.manufacturing_order_id,
+        ln.component_part_id,
+        ln.requested_quantity,
+        lot,
+      );
     }
     return ticketId;
   });

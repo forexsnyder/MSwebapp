@@ -1,11 +1,18 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
-import type { Part } from "../types";
+import type { Order, Part } from "../types";
 import { SearchableSelect } from "../components/SearchableSelect";
 import { useAuth } from "../auth/AuthContext";
 
 const DUMMY_REQUESTER_NAME = "Test_Steve";
 
 type RequestType = "issue" | "scrap" | "return";
+
+type CartEntry = {
+  inventory_part_id: number;
+  manufacturing_order_id: string;
+  component_part_id: string;
+  requested_quantity: number;
+};
 
 const REQUEST_TYPE_OPTIONS: { value: RequestType; label: string }[] = [
   { value: "issue", label: "Issue" },
@@ -23,11 +30,12 @@ export function RequestPartsPage() {
   const { user } = useAuth();
   const requesterName = user?.trim() || DUMMY_REQUESTER_NAME;
   const [parts, setParts] = useState<Part[]>([]);
+  const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const [cart, setCart] = useState<Record<number, number>>({});
+  const [cart, setCart] = useState<Record<string, CartEntry>>({});
   const [createdTicketId, setCreatedTicketId] = useState<number | null>(null);
   const [requestType, setRequestType] = useState<RequestType>("issue");
   const [selectedInventoryPartId, setSelectedInventoryPartId] = useState("");
@@ -40,13 +48,22 @@ export function RequestPartsPage() {
     (async () => {
       setLoading(true);
       setError(null);
-      const res = await fetch("/api/parts");
-      if (!res.ok) {
-        if (!cancelled) setError("Could not load inventory parts.");
+      const [inventoryRes, ordersRes] = await Promise.all([
+        fetch("/api/inventory-catalog"),
+        fetch("/api/manufacturing-orders"),
+      ]);
+      if (!inventoryRes.ok || !ordersRes.ok) {
+        if (!cancelled) setError("Could not load Inventory and MO data.");
         return;
       }
-      const data = (await res.json()) as Part[];
-      if (!cancelled) setParts(data);
+      const [inventoryData, orderData] = await Promise.all([
+        inventoryRes.json() as Promise<Part[]>,
+        ordersRes.json() as Promise<Order[]>,
+      ]);
+      if (!cancelled) {
+        setParts(inventoryData);
+        setOrders(orderData);
+      }
       if (!cancelled) setLoading(false);
     })();
     return () => {
@@ -57,20 +74,19 @@ export function RequestPartsPage() {
   const cartItems = useMemo(() => {
     const byId = new Map(parts.map((p) => [p.id, p] as const));
     return Object.entries(cart)
-      .map(([idStr, qty]) => {
-        const id = Number(idStr);
-        const part = byId.get(id);
+      .map(([cartKey, entry]) => {
+        const part = byId.get(entry.inventory_part_id);
         if (!part) return null;
-        return { part, requested_quantity: qty };
+        return { cartKey, part, ...entry };
       })
-      .filter(Boolean) as { part: Part; requested_quantity: number }[];
+      .filter(Boolean) as Array<{ cartKey: string; part: Part } & CartEntry>;
   }, [cart, parts]);
 
   const cartItemsByMo = useMemo(() => {
     const order: string[] = [];
-    const groups = new Map<string, { part: Part; requested_quantity: number }[]>();
+    const groups = new Map<string, Array<{ cartKey: string; part: Part } & CartEntry>>();
     for (const row of cartItems) {
-      const mo = row.part.manufacturing_order_id;
+      const mo = row.manufacturing_order_id;
       if (!groups.has(mo)) {
         groups.set(mo, []);
         order.push(mo);
@@ -88,27 +104,18 @@ export function RequestPartsPage() {
     return parts.find((p) => String(p.id) === selectedInventoryPartId) ?? null;
   }, [parts, selectedInventoryPartId]);
 
-  const selectedSearchPartRows = useMemo(() => {
-    if (!selectedSearchPart) return [];
-    const selectedKey = catalogPartKey(selectedSearchPart);
-    return parts.filter((part) => catalogPartKey(part) === selectedKey);
-  }, [parts, selectedSearchPart]);
-
   const moOptions = useMemo(() => {
-    const sourceParts = selectedSearchPart ? selectedSearchPartRows : parts;
     return Array.from(
-      new Set(sourceParts.map((p) => p.manufacturing_order_id).filter(Boolean)),
+      new Set(orders.map((order) => order.manufacturing_order_id).filter(Boolean)),
     )
       .sort((a, b) => a.localeCompare(b))
       .map((mo) => ({ value: mo, label: mo }));
-  }, [parts, selectedSearchPart, selectedSearchPartRows]);
+  }, [orders]);
 
   const partSearchOptions = useMemo(() => {
     const uniqueParts = new Map<string, Part>();
 
     for (const part of parts) {
-      // Inventory rows are repeated for each MO/component association. The
-      // global part search should show each visible inventory part only once.
       const key = catalogPartKey(part);
       if (!uniqueParts.has(key)) uniqueParts.set(key, part);
     }
@@ -129,20 +136,20 @@ export function RequestPartsPage() {
       });
   }, [parts]);
 
-  const partsForMo = useMemo(() => {
+  const ordersForMo = useMemo(() => {
     if (!selectedMoId) return [];
-    return parts.filter((p) => p.manufacturing_order_id === selectedMoId);
-  }, [parts, selectedMoId]);
+    return orders.filter((order) => order.manufacturing_order_id === selectedMoId);
+  }, [orders, selectedMoId]);
 
   const componentPartOptions = useMemo(() => {
     const byId = new Map<string, string>();
-    for (const part of partsForMo) {
-      if (!part.component_part_id) continue;
+    for (const order of ordersForMo) {
+      if (!order.component_part_id) continue;
       const description =
-        part.component_part_id_item_description?.trim() ||
-        (part.item_description ? `${part.component_part_id} - ${part.item_description}` : part.component_part_id);
-      if (!byId.has(part.component_part_id) || description.length > (byId.get(part.component_part_id)?.length ?? 0)) {
-        byId.set(part.component_part_id, description);
+        order.component_part_id_item_description?.trim() ||
+        (order.item_description ? `${order.component_part_id} - ${order.item_description}` : order.component_part_id);
+      if (!byId.has(order.component_part_id) || description.length > (byId.get(order.component_part_id)?.length ?? 0)) {
+        byId.set(order.component_part_id, description);
       }
     }
     return Array.from(byId.entries())
@@ -152,36 +159,22 @@ export function RequestPartsPage() {
         label: description,
         searchText: `${id} ${description}`,
       }));
-  }, [partsForMo]);
+  }, [ordersForMo]);
 
-  const selectedPartBySearch = useMemo(() => {
-    if (!selectedSearchPart || !selectedMoId) return null;
+  const selectedPart = selectedSearchPart;
+  const selectedOrder = useMemo(() => {
+    if (!selectedMoId) return null;
     return (
-      selectedSearchPartRows
-        .filter((part) => part.manufacturing_order_id === selectedMoId)
-        .slice()
-        .sort((a, b) => a.part_revision_id.localeCompare(b.part_revision_id))[0] ?? null
+      ordersForMo.find((order) => order.component_part_id === selectedComponentPartId) ??
+      ordersForMo.find((order) => order.mo_status_code_description.includes("In Shop")) ??
+      ordersForMo[0] ??
+      null
     );
-  }, [selectedMoId, selectedSearchPart, selectedSearchPartRows]);
+  }, [ordersForMo, selectedComponentPartId, selectedMoId]);
 
-  const selectedPartByMoComponent = useMemo(() => {
-    if (!selectedMoId || !selectedComponentPartId) return null;
-    const matches = parts
-      .filter(
-        (p) =>
-          p.manufacturing_order_id === selectedMoId && p.component_part_id === selectedComponentPartId,
-      )
-      .slice()
-      .sort((a, b) => (a.part_id + a.part_revision_id).localeCompare(b.part_id + b.part_revision_id));
-    return matches[0] ?? null;
-  }, [parts, selectedComponentPartId, selectedMoId]);
-
-  const selectedPart = selectedPartBySearch ?? selectedPartByMoComponent;
-
-  const selectedPartInShop = useMemo(() => {
-    if (!selectedPart) return false;
-    return selectedPart.mo_status_code_description.includes("In Shop");
-  }, [selectedPart]);
+  const selectedMoInShop = Boolean(
+    selectedOrder?.mo_status_code_description.includes("In Shop"),
+  );
 
   function selectInventoryPart(value: string) {
     setSelectedInventoryPartId(value);
@@ -199,20 +192,16 @@ export function RequestPartsPage() {
   function addSelectedToCart() {
     setError(null);
     setCreatedTicketId(null);
-    if (selectedInventoryPartId && !selectedMoId) {
-      setError("Select the correct Manufacturing Order ID for the selected part.");
-      return;
-    }
-    if (!selectedInventoryPartId && (!selectedMoId || !selectedComponentPartId)) {
-      setError("Select a Manufacturing Order ID and Component Part ID, or search by Part ID / Item Description.");
+    if (!selectedMoId) {
+      setError("Select a Manufacturing Order ID.");
       return;
     }
     if (!selectedPart) {
-      setError("No inventory row matched the selected fields.");
+      setError("Select a Part ID or Item Description from Inventory.");
       return;
     }
-    if (!selectedPartInShop) {
-      setError('This item cannot be added unless the MO Status Code Description contains "In Shop".');
+    if (!selectedMoInShop) {
+      setError('This MO cannot be used unless its Status Code Description contains "In Shop".');
       return;
     }
     const q = Number(qtyDraft);
@@ -220,25 +209,35 @@ export function RequestPartsPage() {
       setError("Quantity must be a whole number ≥ 0.");
       return;
     }
-    setCart((prev) => ({ ...prev, [selectedPart.id]: q }));
+    const cartKey = `${selectedMoId}\u001f${selectedComponentPartId}\u001f${selectedPart.id}`;
+    setCart((prev) => ({
+      ...prev,
+      [cartKey]: {
+        inventory_part_id: selectedPart.id,
+        manufacturing_order_id: selectedMoId,
+        component_part_id: selectedComponentPartId,
+        requested_quantity: q,
+      },
+    }));
     setQtyDraft("");
     setSelectedInventoryPartId("");
-    setSelectedMoId("");
-    setSelectedComponentPartId("");
   }
 
-  function removeFromCart(id: number) {
+  function removeFromCart(cartKey: string) {
     setCart((prev) => {
       const next = { ...prev };
-      delete next[id];
+      delete next[cartKey];
       return next;
     });
   }
 
-  function setCartQty(id: number, raw: string) {
+  function setCartQty(cartKey: string, raw: string) {
     const q = Number(raw);
     if (!Number.isInteger(q) || q < 0) return;
-    setCart((prev) => ({ ...prev, [id]: q }));
+    setCart((prev) => ({
+      ...prev,
+      [cartKey]: { ...prev[cartKey], requested_quantity: q },
+    }));
   }
 
   async function checkout(e: FormEvent) {
@@ -259,6 +258,8 @@ export function RequestPartsPage() {
         request_type: requestType,
         lines: cartItems.map((ci) => ({
           inventory_part_id: ci.part.id,
+          manufacturing_order_id: ci.manufacturing_order_id,
+          component_part_id: ci.component_part_id,
           requested_quantity: ci.requested_quantity,
         })),
       }),
@@ -324,29 +325,23 @@ export function RequestPartsPage() {
                     label="Manufacturing Order ID"
                     value={selectedMoId}
                     options={moOptions}
-                    placeholder={selectedSearchPart ? "Enter the correct MO…" : "Select MO…"}
+                    placeholder="Select MO…"
                     searchPlaceholder="Enter or search MO IDs…"
                     onChange={selectMo}
                   />
 
                   <SearchableSelect
-                    label="Component Part ID (for selected MO)"
+                    label="Component Part ID (optional, from MO data)"
                     value={selectedComponentPartId}
                     options={componentPartOptions}
-                    placeholder={
-                      selectedSearchPart
-                        ? "Part selected below"
-                        : selectedMoId
-                          ? "Select component part…"
-                          : "Select MO first"
-                    }
+                    placeholder={selectedMoId ? "Select component part…" : "Select MO first"}
                     searchPlaceholder="Search Component Part IDs…"
-                    disabled={!selectedMoId || Boolean(selectedSearchPart)}
+                    disabled={!selectedMoId}
                     onChange={selectComponentPart}
                   />
 
-                  <div className="request-choice-divider" role="separator" aria-label="or">
-                    <span>OR</span>
+                  <div className="request-choice-divider" role="separator" aria-label="Inventory selection">
+                    <span>INVENTORY</span>
                   </div>
 
                   <SearchableSelect
@@ -374,21 +369,27 @@ export function RequestPartsPage() {
                     type="button"
                     className="btn btn--primary btn--submit-wide"
                     onClick={addSelectedToCart}
-                    disabled={!selectedPart || !selectedPartInShop}
+                    disabled={!selectedMoId || !selectedPart || !selectedMoInShop}
                   >
                     Add to cart
                   </button>
                 </div>
               </div>
 
-              {selectedPart && (
+              {selectedPart && selectedMoId && (
                 <p className="muted small" style={{ marginTop: "0.5rem" }}>
                   Selected: part <span className="mono">{selectedPart.part_id}</span> ·{" "}
                   {selectedPart.item_description || "No item description"} · MO{" "}
-                  <span className="mono">{selectedPart.manufacturing_order_id}</span> · component{" "}
-                  <span className="mono">{selectedPart.component_part_id}</span> · informational to-issue{" "}
-                  <strong>{selectedPart.to_issue_quantity}</strong> · MO status{" "}
-                  <span className="mono">{selectedPart.mo_status_code_description}</span>
+                  <span className="mono">{selectedMoId}</span>
+                  {selectedComponentPartId ? (
+                    <> · component <span className="mono">{selectedComponentPartId}</span></>
+                  ) : null}
+                  {selectedOrder ? (
+                    <>
+                      {" "}· informational to-issue <strong>{selectedOrder.to_issue_quantity}</strong> · MO status{" "}
+                      <span className="mono">{selectedOrder.mo_status_code_description}</span>
+                    </>
+                  ) : null}
                 </p>
               )}
             </section>
@@ -418,9 +419,9 @@ export function RequestPartsPage() {
                             </tr>
                           </thead>
                           <tbody>
-                            {rows.map(({ part, requested_quantity }) => (
-                              <tr key={part.id}>
-                                <td className="mono">{part.component_part_id}</td>
+                            {rows.map(({ cartKey, part, component_part_id, requested_quantity }) => (
+                              <tr key={cartKey}>
+                                <td className="mono">{component_part_id || "—"}</td>
                                 <td>
                                   <span className="mono">{part.part_id}</span>
                                   <br />
@@ -433,18 +434,24 @@ export function RequestPartsPage() {
                                     min={0}
                                     step={1}
                                     value={String(requested_quantity)}
-                                    onChange={(e) => setCartQty(part.id, e.target.value)}
-                                    aria-label={`Requested quantity for ${part.component_part_id} (MO ${manufacturing_order_id})`}
+                                    onChange={(e) => setCartQty(cartKey, e.target.value)}
+                                    aria-label={`Requested quantity for ${part.part_id} (MO ${manufacturing_order_id})`}
                                   />
                                 </td>
-                                <td className="muted">{part.to_issue_quantity}</td>
+                                <td className="muted">
+                                  {orders.find(
+                                    (order) =>
+                                      order.manufacturing_order_id === manufacturing_order_id &&
+                                      (!component_part_id || order.component_part_id === component_part_id),
+                                  )?.to_issue_quantity ?? "—"}
+                                </td>
                                 <td>{part.on_hand_quantity}</td>
                                 <td>
                                   <div className="row-actions">
                                     <button
                                       type="button"
                                       className="btn btn--small btn--danger-ghost"
-                                      onClick={() => removeFromCart(part.id)}
+                                      onClick={() => removeFromCart(cartKey)}
                                     >
                                       Remove
                                     </button>

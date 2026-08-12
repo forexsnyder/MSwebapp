@@ -20,13 +20,17 @@ export type Part = {
 
 export type Order = {
   id: number;
-  created_at: string;
-  requester_name: string;
   manufacturing_order_id: string;
+  component_order_id: string;
   component_part_id: string;
   component_part_revision_id: string;
+  part_id: string;
+  part_revision_id: string;
+  item_description: string;
+  component_part_id_item_description: string;
   to_issue_quantity: number;
   mo_status_code_description: string;
+  updated_at: string;
 };
 
 export type RequestType = "issue" | "scrap" | "return";

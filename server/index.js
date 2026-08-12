@@ -24,6 +24,8 @@ import {
   listNotifications,
   markNotificationsRead,
   listLotsForInventoryPart,
+  listInventoryCatalog,
+  listManufacturingOrders,
   listParts,
   resetDatabase,
   resetInventory,
@@ -94,6 +96,14 @@ app.get("/api/health", (_req, res) => {
 
 app.get("/api/parts", (_req, res) => {
   res.json(listParts());
+});
+
+app.get("/api/inventory-catalog", (_req, res) => {
+  res.json(listInventoryCatalog());
+});
+
+app.get("/api/manufacturing-orders", (_req, res) => {
+  res.json(listManufacturingOrders());
 });
 
 app.get("/api/inventory-parts/:id/lots", (req, res) => {

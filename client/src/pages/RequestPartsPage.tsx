@@ -161,7 +161,6 @@ export function RequestPartsPage() {
       }));
   }, [ordersForMo]);
 
-  const selectedPart = selectedSearchPart;
   const selectedOrder = useMemo(() => {
     if (!selectedMoId) return null;
     return (
@@ -171,6 +170,26 @@ export function RequestPartsPage() {
       null
     );
   }, [ordersForMo, selectedComponentPartId, selectedMoId]);
+
+  const selectedComponentInventoryPart = useMemo(() => {
+    if (!selectedComponentPartId) return null;
+    const componentId = selectedComponentPartId.trim().toLocaleLowerCase();
+    const componentRevision = selectedOrder?.component_part_revision_id?.trim().toLocaleLowerCase();
+    const matches = parts.filter(
+      (part) => part.part_id.trim().toLocaleLowerCase() === componentId,
+    );
+    return (
+      matches.find(
+        (part) =>
+          componentRevision &&
+          part.part_revision_id.trim().toLocaleLowerCase() === componentRevision,
+      ) ??
+      matches[0] ??
+      null
+    );
+  }, [parts, selectedComponentPartId, selectedOrder]);
+
+  const selectedPart = selectedSearchPart ?? selectedComponentInventoryPart;
 
   const selectedMoInShop = Boolean(
     selectedOrder?.mo_status_code_description.includes("In Shop"),
@@ -196,8 +215,12 @@ export function RequestPartsPage() {
       setError("Select a Manufacturing Order ID.");
       return;
     }
+    if (!selectedInventoryPartId && !selectedComponentPartId) {
+      setError("Select either a Component Part ID or a Part ID / Item Description.");
+      return;
+    }
     if (!selectedPart) {
-      setError("Select a Part ID or Item Description from Inventory.");
+      setError("The selected Component Part ID was not found in Inventory.");
       return;
     }
     if (!selectedMoInShop) {
@@ -221,6 +244,7 @@ export function RequestPartsPage() {
     }));
     setQtyDraft("");
     setSelectedInventoryPartId("");
+    setSelectedComponentPartId("");
   }
 
   function removeFromCart(cartKey: string) {
@@ -331,12 +355,12 @@ export function RequestPartsPage() {
                   />
 
                   <SearchableSelect
-                    label="Component Part ID (optional, from MO data)"
+                    label="Component Part ID (from MO data)"
                     value={selectedComponentPartId}
                     options={componentPartOptions}
                     placeholder={selectedMoId ? "Select component part…" : "Select MO first"}
                     searchPlaceholder="Search Component Part IDs…"
-                    disabled={!selectedMoId}
+                    disabled={!selectedMoId || Boolean(selectedInventoryPartId)}
                     onChange={selectComponentPart}
                   />
 
@@ -350,6 +374,7 @@ export function RequestPartsPage() {
                     options={partSearchOptions}
                     placeholder="Enter part ID or description…"
                     searchPlaceholder="Enter any part of the ID or description…"
+                    disabled={Boolean(selectedComponentPartId)}
                     onChange={selectInventoryPart}
                   />
 

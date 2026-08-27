@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAuth } from "../auth/AuthContext";
+import { PickerNotificationBanner } from "../components/PickerNotificationBanner";
 import type { InventoryLot, PickTicket, PickTicketLine, PickTicketSummary, RequestType } from "../types";
 import { printPickTicket, printPickTickets } from "../utils/printPickTicket";
 
@@ -40,20 +41,31 @@ export function PickOrdersPage() {
   const [reopening, setReopening] = useState(false);
   const [printing, setPrinting] = useState(false);
   const [printingAll, setPrintingAll] = useState(false);
+  const listRequest = useRef(0);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
 
   const loadList = useCallback(
-    async (statusOverride?: QueueTab) => {
-      setError(null);
+    async (statusOverride?: QueueTab, background = false) => {
+      const request = ++listRequest.current;
+      if (!background) setError(null);
       const status = statusOverride ?? queueTab;
       const params = new URLSearchParams({ status });
       const q = searchQuery.trim();
       if (q) params.set("q", q);
-      const res = await fetch(`/api/pick-tickets?${params}`);
-      if (!res.ok) {
-        setError("Could not load pick tickets.");
-        return;
+      try {
+        const res = await fetch(`/api/pick-tickets?${params}`, { cache: "no-store" });
+        if (!res.ok) throw new Error("Could not load pick tickets.");
+        const next = (await res.json()) as PickTicketSummary[];
+        if (request === listRequest.current) {
+          setTickets(next);
+          setRefreshError(null);
+        }
+      } catch {
+        if (request === listRequest.current) {
+          if (background) setRefreshError("Could not refresh the pick queue. Retrying automatically.");
+          else setError("Could not load pick tickets.");
+        }
       }
-      setTickets((await res.json()) as PickTicketSummary[]);
     },
     [queueTab, searchQuery],
   );
@@ -69,6 +81,7 @@ export function PickOrdersPage() {
     }, searchQuery.trim() ? 250 : 0);
     return () => {
       c = true;
+      listRequest.current += 1;
       window.clearTimeout(t);
     };
   }, [loadList, searchQuery]);
@@ -406,6 +419,8 @@ export function PickOrdersPage() {
   }
 
   return (
+    <>
+    <PickerNotificationBanner onRefresh={() => void loadList(undefined, true)} />
     <div className="page pick-layout">
       <div className="ui-card ui-card--padded pick-column">
         <h2 className="ui-card__section-title">Pick tickets</h2>
@@ -458,6 +473,7 @@ export function PickOrdersPage() {
         </div>
 
         {error && <p className="banner banner--error">{error}</p>}
+        {refreshError && <p className="banner banner--error" role="status">{refreshError}</p>}
         {success && <p className="banner banner--success">{success}</p>}
         {loading ? (
           <p className="muted">Loading…</p>
@@ -641,5 +657,6 @@ export function PickOrdersPage() {
         )}
       </div>
     </div>
+    </>
   );
 }

@@ -13,7 +13,7 @@ The Pick screen checks for new orders and refreshes its current queue every 15 s
 
 Deploy both client and server changes using the normal production update procedure, build the client with `npm run build`, and restart the server. Startup creates the `picker_notification_reads` table automatically; no manual SQL or new environment variables are required. Back up the database before updating as usual.
 
-This implements on-screen notifications only. The Pick screen must be open for alerts to appear; automatic printing remains unchanged.
+The Pick screen must be open for on-screen alerts to appear. Optional server-side automatic printing is configured separately; see [automatic printing](README-automatic-printing.md).
 
 ## Verification
 

@@ -5,6 +5,8 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import ExcelJS from "exceljs";
 import JSZip from "jszip";
+import { printConfig } from "./print-config.js";
+import { createPrintQueue } from "./print-queue.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const defaultDataDir = join(__dirname, "data");
@@ -327,6 +329,7 @@ function migrate() {
 }
 
 migrate();
+export const printQueue = createPrintQueue(db);
 
 function sha256Hex(text) {
   return crypto.createHash("sha256").update(text).digest("hex");
@@ -872,6 +875,13 @@ export function createPickTicket({ requester_name, request_type, lines }) {
         ln.requested_quantity,
         lot,
       );
+    }
+    if (printConfig.enabled) {
+      const snapshot = getPickTicket(ticketId);
+      snapshot.lines = snapshot.lines.map(line => ({
+        ...line, available_lots: listLotsForInventoryPart(line.inventory_part_id) ?? [],
+      }));
+      printQueue.enqueue(snapshot, printConfig.printer);
     }
     return ticketId;
   });

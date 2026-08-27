@@ -3,11 +3,15 @@ import { beforeEach, test } from "node:test";
 
 // Never touch the developer's or production database.
 process.env.DB_PATH = ":memory:";
+process.env.AUTO_PRINT_ENABLED = "true";
+process.env.CUPS_PRINTER = "DEMO-QUEUE";
 const {
   cancelPickTicket, clearPickQueue, closePickTicket, createPickTicket, getPickTicket,
   importManufacturingOrdersCsv, importInventoryCsv, listNotifications, listParts, listPickerNotifications,
   markNotificationsRead, markPickerNotificationsRead, resetDatabase,
+  printQueue,
 } = await import("./db.js");
+const { printConfig } = await import("./print-config.js");
 
 let partId;
 beforeEach(() => {
@@ -89,4 +93,29 @@ test("invalid/future IDs cannot hide future orders and user is required", () => 
   assert.deepEqual(markPickerNotificationsRead("Picker", [1, -1, "no", 0, 1.5]), { updated: 0 });
   const ticket = create();
   assert.equal(listPickerNotifications("Picker")[0].id, ticket.id);
+});
+
+test("new ticket atomically queues one immutable snapshot with available lots", () => {
+  const ticket = create();
+  assert.equal(printQueue.status(ticket.id).job.status, "queued");
+  assert.equal(printQueue.enqueue(ticket, "DEMO-QUEUE"), 0);
+  const job = printQueue.claim();
+  const snapshot = JSON.parse(job.snapshot_json);
+  assert.equal(snapshot.requester_name, "Requester");
+  assert.equal(snapshot.lines[0].requested_quantity, 1);
+  assert.equal(snapshot.lines[0].available_lots[0].lot_number, "LOT-1");
+  assert.equal(printQueue.claim(), null);
+});
+
+test("rejected requests do not queue prints and disabled printing does not backfill", () => {
+  assert.throws(() => createPickTicket({ requester_name: "Requester", lines: [
+    { inventory_part_id: partId, manufacturing_order_id: "MO-1", requested_quantity: 1 },
+    { inventory_part_id: 999999, manufacturing_order_id: "MO-1", requested_quantity: 1 },
+  ] }), /not found/);
+  assert.equal(printQueue.claim(), null);
+  printConfig.enabled = false;
+  let ticket;
+  try { ticket = create(); } finally { printConfig.enabled = true; }
+  assert.equal(printQueue.status(ticket.id).job, null);
+  assert.equal(printQueue.claim(), null);
 });

@@ -3,6 +3,8 @@ import express from "express";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
+import { printConfig } from "./print-config.js";
+import { createPrintWorker } from "./print-worker.js";
 import {
   cancelPickTicket,
   closePickTicket,
@@ -25,6 +27,7 @@ import {
   markNotificationsRead,
   listPickerNotifications,
   markPickerNotificationsRead,
+  printQueue,
   listLotsForInventoryPart,
   listInventoryCatalog,
   listManufacturingOrders,
@@ -94,6 +97,16 @@ app.get("/api/health", (_req, res) => {
     hasClientBuild,
     uptime_s: Math.round(process.uptime()),
   });
+});
+
+app.get("/api/printing/status", (req, res) => {
+  const ticketId = req.query.ticketId === undefined ? undefined : Number(req.query.ticketId);
+  if (ticketId !== undefined && (!Number.isSafeInteger(ticketId) || ticketId < 1)) {
+    res.status(400).json({ error: "invalid ticket ID" });
+    return;
+  }
+  res.set("Cache-Control", "no-store");
+  res.json({ enabled: printConfig.enabled, printer: printConfig.printer || null, ...printQueue.status(ticketId) });
 });
 
 app.get("/api/parts", (_req, res) => {
@@ -411,3 +424,9 @@ const server = app.listen(PORT, "0.0.0.0", () => {
 });
 server.requestTimeout = Number(process.env.REQUEST_TIMEOUT_MS ?? 600000);
 server.headersTimeout = Number(process.env.HEADERS_TIMEOUT_MS ?? 610000);
+
+const printWorker = createPrintWorker({ queue: printQueue, config: printConfig });
+printWorker.start();
+for (const signal of ["SIGTERM", "SIGINT"]) {
+  process.once(signal, () => { printWorker.stop(); server.close(); });
+}

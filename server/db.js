@@ -315,6 +315,15 @@ function migrate() {
   db.exec(
     `CREATE INDEX IF NOT EXISTS idx_notifications_recipient ON notifications (recipient_name, read_at, created_at)`,
   );
+  // Shared queue: acknowledging an alert belongs to a user, never to an assigned picker.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS picker_notification_reads (
+      recipient_name TEXT NOT NULL,
+      pick_ticket_id INTEGER NOT NULL REFERENCES pick_tickets(id) ON DELETE CASCADE,
+      read_at TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (recipient_name, pick_ticket_id)
+    )
+  `);
 }
 
 migrate();
@@ -1202,6 +1211,45 @@ export function reopenPickTicket(id, { reopened_by }) {
     payload: ticket,
   });
   return ticket;
+}
+
+export function listPickerNotifications(recipientName) {
+  const recipient = String(recipientName ?? "").trim().toLowerCase();
+  if (!recipient) throw new Error("recipient is required");
+  // Include existing open work on first use, but never alert for completed/cancelled tickets.
+  const tickets = db.prepare(`
+    SELECT t.id, t.created_at, t.requester_name, t.request_type, t.manufacturing_order_id
+    FROM pick_tickets t
+    WHERE t.status = 'open' AND t.cancelled_at IS NULL
+      AND NOT EXISTS (
+        SELECT 1 FROM picker_notification_reads r
+        WHERE r.recipient_name = ? AND r.pick_ticket_id = t.id
+      )
+    ORDER BY t.id DESC
+  `).all(recipient);
+  return tickets.map((ticket) => ({
+    id: ticket.id,
+    created_at: ticket.created_at,
+    recipient_name: recipient,
+    pick_ticket_id: ticket.id,
+    message: `New ${ticket.request_type} request ${formatTicketRef(ticket.id)}${ticket.manufacturing_order_id ? ` (MO ${ticket.manufacturing_order_id})` : ""} from ${ticket.requester_name} is ready to pick.`,
+    read_at: null,
+  }));
+}
+
+export function markPickerNotificationsRead(recipientName, ids) {
+  const recipient = String(recipientName ?? "").trim().toLowerCase();
+  if (!recipient) throw new Error("recipient is required");
+  if (!Array.isArray(ids)) throw new Error("ids must be an array");
+  const normalized = [...new Set(ids.map(Number).filter((id) => Number.isSafeInteger(id) && id > 0))];
+  const insert = db.prepare(`
+    INSERT OR IGNORE INTO picker_notification_reads (recipient_name, pick_ticket_id)
+    SELECT ?, id FROM pick_tickets
+    WHERE id = ? AND status = 'open' AND cancelled_at IS NULL
+  `);
+  return db.transaction(() => ({
+    updated: normalized.reduce((count, id) => count + insert.run(recipient, id).changes, 0),
+  }))();
 }
 
 export function listNotifications(recipientName, { unreadOnly = false } = {}) {

@@ -23,6 +23,8 @@ import {
   listUserPickTicketHistory,
   listNotifications,
   markNotificationsRead,
+  listPickerNotifications,
+  markPickerNotificationsRead,
   listLotsForInventoryPart,
   listInventoryCatalog,
   listManufacturingOrders,
@@ -155,6 +157,22 @@ app.post("/api/notifications/mark-read", (req, res) => {
   }
   try {
     res.json(markNotificationsRead(user, req.body?.ids ?? []));
+  } catch (e) {
+    res.status(400).json({ error: e.message || "mark read failed" });
+  }
+});
+
+app.get("/api/picker-notifications", (req, res) => {
+  try {
+    res.json(listPickerNotifications(req.query.user));
+  } catch (e) {
+    res.status(400).json({ error: e.message || "could not load picker notifications" });
+  }
+});
+
+app.post("/api/picker-notifications/mark-read", (req, res) => {
+  try {
+    res.json(markPickerNotificationsRead(req.body?.user, req.body?.ids ?? []));
   } catch (e) {
     res.status(400).json({ error: e.message || "mark read failed" });
   }

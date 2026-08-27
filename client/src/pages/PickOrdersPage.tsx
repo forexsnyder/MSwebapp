@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAuth } from "../auth/AuthContext";
 import { PickerNotificationBanner } from "../components/PickerNotificationBanner";
+import { AutomaticPrintStatus } from "../components/AutomaticPrintStatus";
 import type { InventoryLot, PickTicket, PickTicketLine, PickTicketSummary, RequestType } from "../types";
 import { printPickTicket, printPickTickets } from "../utils/printPickTicket";
 
@@ -421,6 +422,7 @@ export function PickOrdersPage() {
   return (
     <>
     <PickerNotificationBanner onRefresh={() => void loadList(undefined, true)} />
+    <AutomaticPrintStatus ticketId={selectedId ?? undefined} />
     <div className="page pick-layout">
       <div className="ui-card ui-card--padded pick-column">
         <h2 className="ui-card__section-title">Pick tickets</h2>

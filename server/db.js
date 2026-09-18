@@ -593,17 +593,21 @@ export function resetDatabase() {
   return tx();
 }
 
-export function listAuditLog({ limit = 200 } = {}) {
+export function listAuditLog({ limit = 200, from, to } = {}) {
   const lim = Number(limit);
   const safe = Number.isInteger(lim) && lim > 0 && lim <= 2000 ? lim : 200;
+  const clauses = []; const params = [];
+  if (typeof from === "string" && /^\d{4}-\d{2}-\d{2}$/.test(from)) { clauses.push("created_at >= ?"); params.push(`${from} 00:00:00`); }
+  if (typeof to === "string" && /^\d{4}-\d{2}-\d{2}$/.test(to)) { clauses.push("created_at < ?"); const end = new Date(`${to}T00:00:00Z`); end.setUTCDate(end.getUTCDate() + 1); params.push(end.toISOString().slice(0, 19).replace("T", " ")); }
   return db
     .prepare(
       `SELECT id, created_at, actor, action, entity, entity_id, payload_json, payload_hash, prev_entry_hash, entry_hash
        FROM audit_log
+       ${clauses.length ? `WHERE ${clauses.join(" AND ")}` : ""}
        ORDER BY id DESC
        LIMIT ?`,
     )
-    .all(safe);
+    .all(...params, safe);
 }
 
 const pickTicketSummarySql = `

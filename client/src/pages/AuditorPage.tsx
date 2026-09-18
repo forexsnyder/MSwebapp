@@ -70,6 +70,8 @@ export function AuditorPage() {
   const [adminBusy, setAdminBusy] = useState<null | "resetInventory" | "resetMo" | "resetDatabase" | "clearPickQueue" | "clearAuditLog">(null);
   const [adminBanner, setAdminBanner] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<number | null>(null);
+  const [exportFrom, setExportFrom] = useState("");
+  const [exportTo, setExportTo] = useState("");
   const [fileName, setFileName] = useState<string | null>(null);
   const [importFile, setImportFile] = useState<ImportFilePayload | null>(null);
   const [importTarget, setImportTarget] = useState<ImportTarget>("inventory");
@@ -331,7 +333,7 @@ export function AuditorPage() {
             className={`inventory-tab${tab === "export" ? " inventory-tab--active" : ""}`}
             onClick={() => setTab("export")}
           >
-            Export inventory CSV
+            Export data
           </button>
         </div>
 
@@ -588,11 +590,13 @@ export function AuditorPage() {
 
         {tab === "export" && (
           <section className="card" style={{ marginTop: "1rem" }}>
-            <h3 className="section-title">Export on-site inventory</h3>
-            <p className="muted small">Downloads a CSV snapshot of the current `inventory_parts` table.</p>
-            <a className="btn btn--primary" href="/api/inventory/export.csv">
-              Download inventory CSV
-            </a>
+            <h3 className="section-title">Export data</h3>
+            <p className="muted small">Download the audit log as an Excel workbook, optionally filtered by date.</p>
+            <div className="row-actions" style={{ alignItems: "end", flexWrap: "wrap", marginBottom: "0.75rem" }}>
+              <label><span className="muted small">From</span><input type="date" value={exportFrom} onChange={(e) => setExportFrom(e.target.value)} /></label>
+              <label><span className="muted small">To</span><input type="date" value={exportTo} onChange={(e) => setExportTo(e.target.value)} /></label>
+            </div>
+            <div className="row-actions"><a className="btn btn--primary" href={`/api/audit-log/export.xlsx?limit=2000${exportFrom ? `&from=${exportFrom}` : ""}${exportTo ? `&to=${exportTo}` : ""}`}>Download audit Excel workbook</a><a className="btn" href="/api/inventory/export.csv">Download inventory CSV</a></div>
           </section>
         )}
       </div>

@@ -16,6 +16,11 @@ function formatWhen(iso: string | null | undefined) {
   return d.toLocaleString();
 }
 
+function requestTicketAgain(ticket: PickTicket) {
+  sessionStorage.setItem("mswebapp:request-again", JSON.stringify({ requestType: ticket.request_type, lines: ticket.lines.map((line) => ({ inventoryPartId: line.inventory_part_id, quantity: line.requested_quantity })) }));
+  window.location.href = "/request";
+}
+
 function HistoryTicketDetail({ ticketId }: { ticketId: number }) {
   const [ticket, setTicket] = useState<PickTicket | null>(null);
   const [loading, setLoading] = useState(true);
@@ -50,24 +55,30 @@ function HistoryTicketDetail({ ticketId }: { ticketId: number }) {
         <table className="data-table data-table--nested">
           <thead>
             <tr>
+              <th>Part</th><th>Description</th>
               <th>MO</th>
               <th>Component</th>
               <th>Qty</th>
+              <th>On hand</th>
               <th>Location</th>
             </tr>
           </thead>
           <tbody>
             {ticket.lines.map((ln) => (
               <tr key={ln.id}>
+                <td className="mono">{ln.part_id}</td>
+                <td>{ln.item_description || "—"}</td>
                 <td className="mono small">{ln.manufacturing_order_id}</td>
                 <td className="mono">{ln.component_part_id}</td>
                 <td>{ln.requested_quantity}</td>
+                <td>{ln.on_hand_quantity}</td>
                 <td className="mono small">{ln.default_inventory_location_id}</td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
+      <button type="button" className="btn btn--small btn--primary" onClick={() => requestTicketAgain(ticket)}>Request again</button>
     </div>
   );
 }

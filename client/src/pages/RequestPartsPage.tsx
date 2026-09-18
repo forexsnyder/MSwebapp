@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import type { Order, Part } from "../types";
 import { SearchableSelect } from "../components/SearchableSelect";
 import { useAuth } from "../auth/AuthContext";
@@ -13,6 +13,7 @@ type CartEntry = {
   component_part_id: string;
   requested_quantity: number;
 };
+type SavedRequestState = { cart: Record<string, CartEntry>; requestType: RequestType; selectedInventoryPartId: string; selectedMoId: string; selectedComponentPartId: string; qtyDraft: string };
 
 const REQUEST_TYPE_OPTIONS: { value: RequestType; label: string }[] = [
   { value: "issue", label: "Issue" },
@@ -41,7 +42,29 @@ export function RequestPartsPage() {
   const [selectedInventoryPartId, setSelectedInventoryPartId] = useState("");
   const [selectedMoId, setSelectedMoId] = useState("");
   const [selectedComponentPartId, setSelectedComponentPartId] = useState("");
-  const [qtyDraft, setQtyDraft] = useState("");
+  const [qtyDraft, setQtyDraft] = useState("1");
+  const restoredState = useRef(false);
+  const storageKey = `mswebapp:request-draft:${requesterName}`;
+
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(storageKey);
+      if (saved) {
+        const draft = JSON.parse(saved) as Partial<SavedRequestState>;
+        if (draft.cart) setCart(draft.cart as Record<string, CartEntry>);
+        if (draft.requestType) setRequestType(draft.requestType);
+        if (typeof draft.selectedInventoryPartId === "string") setSelectedInventoryPartId(draft.selectedInventoryPartId);
+        if (typeof draft.selectedMoId === "string") setSelectedMoId(draft.selectedMoId);
+        if (typeof draft.selectedComponentPartId === "string") setSelectedComponentPartId(draft.selectedComponentPartId);
+        if (typeof draft.qtyDraft === "string") setQtyDraft(draft.qtyDraft);
+      }
+    } catch { localStorage.removeItem(storageKey); }
+    restoredState.current = true;
+  }, [storageKey]);
+
+  useEffect(() => {
+    if (restoredState.current) localStorage.setItem(storageKey, JSON.stringify({ cart, requestType, selectedInventoryPartId, selectedMoId, selectedComponentPartId, qtyDraft } satisfies SavedRequestState));
+  }, [cart, requestType, selectedInventoryPartId, selectedMoId, selectedComponentPartId, qtyDraft, storageKey]);
 
   useEffect(() => {
     let cancelled = false;
@@ -63,6 +86,15 @@ export function RequestPartsPage() {
       if (!cancelled) {
         setParts(inventoryData);
         setOrders(orderData);
+        const saved = sessionStorage.getItem("mswebapp:request-again");
+        if (saved) {
+          try {
+            const replay = JSON.parse(saved) as { requestType?: RequestType; lines?: { inventoryPartId: number; quantity: number }[] };
+            const byId = new Map(inventoryData.map((part) => [part.id, part] as const));
+            const replayCart = Object.fromEntries((replay.lines ?? []).flatMap((line) => { const part = byId.get(line.inventoryPartId); if (!part) return []; const key = `${part.manufacturing_order_id}\u001f${part.component_part_id}\u001f${part.id}`; return [[key, { inventory_part_id: part.id, manufacturing_order_id: part.manufacturing_order_id, component_part_id: part.component_part_id, requested_quantity: line.quantity }] as const]; }));
+            setCart(replayCart); if (replay.requestType) setRequestType(replay.requestType); sessionStorage.removeItem("mswebapp:request-again");
+          } catch { sessionStorage.removeItem("mswebapp:request-again"); }
+        }
       }
       if (!cancelled) setLoading(false);
     })();
@@ -242,7 +274,7 @@ export function RequestPartsPage() {
         requested_quantity: q,
       },
     }));
-    setQtyDraft("");
+    setQtyDraft("1");
     setSelectedInventoryPartId("");
     setSelectedComponentPartId("");
   }
@@ -297,6 +329,7 @@ export function RequestPartsPage() {
     const created = (await res.json()) as { id: number };
     setCreatedTicketId(created.id);
     setCart({});
+    localStorage.removeItem(storageKey);
   }
 
   return (

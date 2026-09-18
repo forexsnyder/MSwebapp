@@ -1,5 +1,6 @@
 import cors from "cors";
 import express from "express";
+import ExcelJS from "exceljs";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -287,7 +288,16 @@ app.post("/api/pick-tickets/:id/close", (req, res) => {
 
 app.get("/api/audit-log", (req, res) => {
   const limit = typeof req.query.limit === "string" ? Number(req.query.limit) : undefined;
-  res.json(listAuditLog({ limit }));
+  res.json(listAuditLog({ limit, from: req.query.from, to: req.query.to }));
+});
+
+app.get("/api/audit-log/export.xlsx", async (req, res) => {
+  const limit = typeof req.query.limit === "string" ? Number(req.query.limit) : undefined;
+  const rows = listAuditLog({ limit, from: req.query.from, to: req.query.to });
+  const workbook = new ExcelJS.Workbook(); const sheet = workbook.addWorksheet("Audit Log");
+  sheet.columns = [["ID", "id"], ["Created At", "created_at"], ["Actor", "actor"], ["Action", "action"], ["Entity", "entity"], ["Entity ID", "entity_id"], ["Payload", "payload_json"], ["Payload Hash", "payload_hash"], ["Previous Entry Hash", "prev_entry_hash"], ["Entry Hash", "entry_hash"]].map(([header, key]) => ({ header, key }));
+  rows.forEach((row) => sheet.addRow(row)); sheet.getRow(1).font = { bold: true }; sheet.views = [{ state: "frozen", ySplit: 1 }];
+  res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"); res.setHeader("Content-Disposition", 'attachment; filename="audit_log.xlsx"'); await workbook.xlsx.write(res); res.end();
 });
 
 app.post("/api/admin/reset-inventory", (req, res) => {

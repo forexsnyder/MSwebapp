@@ -260,8 +260,8 @@ export function RequestPartsPage() {
       return;
     }
     const q = Number(qtyDraft);
-    if (!Number.isInteger(q) || q < 0) {
-      setError("Quantity must be a whole number ≥ 0.");
+    if (!Number.isInteger(q) || q < 1) {
+      setError("Quantity must be a whole number ≥ 1.");
       return;
     }
     const cartKey = `${selectedMoId}\u001f${selectedComponentPartId}\u001f${selectedPart.id}`;
@@ -289,7 +289,7 @@ export function RequestPartsPage() {
 
   function setCartQty(cartKey: string, raw: string) {
     const q = Number(raw);
-    if (!Number.isInteger(q) || q < 0) return;
+    if (!Number.isInteger(q) || q < 1) return;
     setCart((prev) => ({
       ...prev,
       [cartKey]: { ...prev[cartKey], requested_quantity: q },
@@ -416,7 +416,7 @@ export function RequestPartsPage() {
                     <input
                       className="field__input field__input--narrow"
                       type="number"
-                      min={0}
+                      min={1}
                       step={1}
                       value={qtyDraft}
                       onChange={(e) => setQtyDraft(e.target.value)}
@@ -489,7 +489,7 @@ export function RequestPartsPage() {
                                   <input
                                     className="field__input field__input--narrow"
                                     type="number"
-                                    min={0}
+                                    min={1}
                                     step={1}
                                     value={String(requested_quantity)}
                                     onChange={(e) => setCartQty(cartKey, e.target.value)}

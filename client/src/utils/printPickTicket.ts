@@ -58,7 +58,7 @@ function renderLinesTable(
   const headerRow = PICK_LINE_HEADERS.map((h) => `<th>${escapeHtml(h)}</th>`).join("");
   const bodyRows = lines
     .map((ln) => {
-      const lotOptions = lotOptionsByLineId?.[ln.id] ?? [];
+      const lotOptions = lotOptionsByLineId?.[ln.id] ?? (ln.available_lots ?? []).map((lot) => lot.lot_number);
       const quantities = lotQuantitiesByLineId?.[ln.id] ?? {};
       const lotDisplayHtml =
         ticketStatus === "open" && lotOptions.length > 0
@@ -87,6 +87,15 @@ function renderTicketBody(
   lotQuantitiesByLineId?: Record<number, Record<string, string>>,
 ) {
   const typeLabel = ticket.request_type.toUpperCase();
+  const typeClass = ticket.request_type === "return" || ticket.request_type === "scrap"
+    ? ` pick-ticket-print--${ticket.request_type}`
+    : "";
+  const typeMarker = ticket.request_type === "issue"
+    ? ""
+    : `<div class="ticket-type-marker">${escapeHtml(typeLabel)} — DO NOT PROCESS AS ISSUE</div>`;
+  const nonPickNotice = ticket.request_type === "issue"
+    ? ""
+    : `<p class="do-not-pick"><strong>DO NOT PICK</strong> — ${escapeHtml(typeLabel)} transaction. Complete this ${escapeHtml(typeLabel.toLowerCase())} transaction according to procedure.</p>`;
   const mo = ticket.manufacturing_order_id || "—";
   const statusExtra =
     ticket.status === "closed" && ticket.closed_by
@@ -104,14 +113,16 @@ function renderTicketBody(
   );
 
   return `
-  <article class="pick-ticket-print">
+  <article class="pick-ticket-print${typeClass}">
     <h2>${escapeHtml(formatTicketRef(ticket.id))}</h2>
+    ${typeMarker}
     <p class="meta">
       <strong>Type:</strong> ${escapeHtml(typeLabel)} ·
       <strong>MO:</strong> <span class="mono">${escapeHtml(mo)}</span> ·
       <strong>Requester:</strong> ${escapeHtml(ticket.requester_name)} ·
       <strong>Created:</strong> ${escapeHtml(ticket.created_at)}${statusExtra}
     </p>
+    ${nonPickNotice}
     ${linesTable}
   </article>`;
 }
@@ -124,7 +135,14 @@ const PRINT_STYLES = `
   h2 { font-size: 1.15rem; margin: 0 0 0.35rem; }
   .meta { font-size: 0.9rem; color: #475569; margin: 0 0 0.75rem; }
   .meta strong { color: #0f172a; }
+  .do-not-pick { margin: 0 0 0.75rem; padding: 0.55rem 0.7rem; color: #9a3412; background: #fff7ed; border: 2px solid #f97316; font-size: 1rem; }
+  .do-not-pick strong { color: #991b1b; letter-spacing: 0.04em; }
   .pick-ticket-print { margin-bottom: 1.5rem; padding-bottom: 1rem; border-bottom: 2px solid #cbd5e1; }
+  .pick-ticket-print--return { border: 5px double #111827; padding: 0.75rem; }
+  .pick-ticket-print--scrap { border: 5px dashed #111827; padding: 0.75rem; }
+  .pick-ticket-print--return:last-child { border-bottom: 5px double #111827; }
+  .pick-ticket-print--scrap:last-child { border-bottom: 5px dashed #111827; }
+  .ticket-type-marker { margin: 0 0 0.75rem; padding: 0.45rem 0.65rem; border: 3px solid #111827; font-size: 1.1rem; font-weight: 900; letter-spacing: 0.08em; text-align: center; }
   .pick-ticket-print:last-child { border-bottom: none; }
   .pick-lines-table { width: 100%; border-collapse: collapse; font-size: 0.85rem; margin-top: 0.5rem; }
   th, td { border: 1px solid #cbd5e1; padding: 0.4rem 0.5rem; text-align: left; vertical-align: middle; }
@@ -141,7 +159,7 @@ const PRINT_STYLES = `
   .lot-qty-box { display: block; min-width: 3.5rem; min-height: 1.65rem; padding: 0.2rem; border: 1.5px solid #64748b; border-radius: 0.2rem; background: #fff; }
   @media print {
     body { margin: 0.5in; }
-    .pick-ticket-print { page-break-after: always; border-bottom: none; }
+    .pick-ticket-print { page-break-after: always; }
     .pick-ticket-print:last-child { page-break-after: auto; }
     tr { page-break-inside: avoid; }
   }

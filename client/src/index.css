@@ -508,6 +508,11 @@ code,
     align-items: start;
   }
 
+  /* Let the detail card shrink to the viewport so its wide table can scroll. */
+  .pick-layout > * {
+    min-width: 0;
+  }
+
   .pick-column {
     margin-bottom: 0;
   }
@@ -1478,6 +1483,8 @@ code,
 }
 
 .table-scroll {
+  min-width: 0;
+  max-width: 100%;
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
 }
@@ -1650,7 +1657,7 @@ code,
   margin: 0.35rem 0 0;
 }
 
-.pick-detail__return-note {
+.pick-detail__non-pick-note {
   margin-top: 0.5rem;
   margin-bottom: 0;
 }
@@ -1722,6 +1729,18 @@ code,
   min-width: 12rem;
 }
 
+.pick-lot-entry {
+  display: grid;
+  grid-template-columns: minmax(8rem, 1fr) 5rem auto;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.pick-lot-remove {
+  min-height: 2.75rem;
+  white-space: nowrap;
+}
+
 .pick-lot-issue-row {
   display: grid;
   grid-template-columns: minmax(6rem, 1fr) 5rem;
@@ -1759,6 +1778,14 @@ code,
   color: #0f766e;
 }
 
+.badge--do-not-pick {
+  background: #991b1b;
+  color: #fff;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  border: 1px solid #7f1d1d;
+}
+
 .badge--cancelled {
   background: rgba(100, 116, 139, 0.15);
   color: #475569;
@@ -1768,6 +1795,12 @@ code,
   background: #eff6ff;
   color: #1e40af;
   border: 1px solid rgba(37, 99, 235, 0.25);
+}
+
+.banner--warning {
+  background: #fff7ed;
+  color: #9a3412;
+  border: 2px solid #f97316;
 }
 
 .reconcile-intro {

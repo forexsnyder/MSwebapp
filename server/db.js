@@ -256,6 +256,46 @@ function migrate() {
   if (lineCols.length > 0 && !lineCols.includes("component_part_id")) {
     db.exec(`ALTER TABLE pick_ticket_lines ADD COLUMN component_part_id TEXT NOT NULL DEFAULT ''`);
   }
+  if (lineCols.length > 0 && !lineCols.includes("request_type")) {
+    db.exec(`ALTER TABLE pick_ticket_lines ADD COLUMN request_type TEXT NOT NULL DEFAULT 'issue' CHECK (request_type IN ('issue','scrap','return'))`);
+  }
+
+  // Mixed tickets may contain the same inventory part more than once (for example,
+  // one Issue line and one Return line). Rebuild the legacy table whose inline
+  // UNIQUE(pick_ticket_id, inventory_part_id) constraint prevented that.
+  const lineIndexes = db.prepare("PRAGMA index_list(pick_ticket_lines)").all();
+  if (lineIndexes.some((index) => index.unique && index.origin === "u")) {
+    db.pragma("foreign_keys = OFF");
+    db.exec(`
+      ALTER TABLE pick_ticket_lot_issues RENAME TO pick_ticket_lot_issues_legacy;
+      ALTER TABLE pick_ticket_lines RENAME TO pick_ticket_lines_legacy;
+      CREATE TABLE pick_ticket_lines (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        pick_ticket_id INTEGER NOT NULL REFERENCES pick_tickets(id) ON DELETE CASCADE,
+        inventory_part_id INTEGER NOT NULL REFERENCES inventory_parts(id),
+        manufacturing_order_id TEXT NOT NULL DEFAULT '',
+        component_part_id TEXT NOT NULL DEFAULT '',
+        requested_quantity INTEGER NOT NULL CHECK (requested_quantity >= 0),
+        lot_number TEXT NOT NULL DEFAULT '',
+        request_type TEXT NOT NULL DEFAULT 'issue' CHECK (request_type IN ('issue','scrap','return'))
+      );
+      INSERT INTO pick_ticket_lines (id, pick_ticket_id, inventory_part_id, manufacturing_order_id, component_part_id, requested_quantity, lot_number, request_type)
+        SELECT id, pick_ticket_id, inventory_part_id, manufacturing_order_id, component_part_id, requested_quantity, lot_number, COALESCE(request_type, 'issue')
+        FROM pick_ticket_lines_legacy;
+      CREATE TABLE pick_ticket_lot_issues (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        pick_ticket_line_id INTEGER NOT NULL REFERENCES pick_ticket_lines(id) ON DELETE CASCADE,
+        lot_number TEXT NOT NULL,
+        issued_quantity REAL NOT NULL CHECK (issued_quantity >= 0),
+        UNIQUE(pick_ticket_line_id, lot_number)
+      );
+      INSERT INTO pick_ticket_lot_issues (id, pick_ticket_line_id, lot_number, issued_quantity)
+        SELECT id, pick_ticket_line_id, lot_number, issued_quantity FROM pick_ticket_lot_issues_legacy;
+      DROP TABLE pick_ticket_lot_issues_legacy;
+      DROP TABLE pick_ticket_lines_legacy;
+    `);
+    db.pragma("foreign_keys = ON");
+  }
 
   if (invCols.length > 0 && !invCols.includes("lot_number")) {
     db.exec(`ALTER TABLE inventory_parts ADD COLUMN lot_number TEXT NOT NULL DEFAULT ''`);
@@ -615,7 +655,10 @@ const pickTicketSummarySql = `
     t.id,
     t.created_at,
     t.requester_name,
-    t.request_type,
+    CASE WHEN (SELECT COUNT(DISTINCT COALESCE(l.request_type, 'issue')) FROM pick_ticket_lines l WHERE l.pick_ticket_id = t.id) > 1
+      THEN 'mixed'
+      ELSE COALESCE((SELECT COALESCE(l.request_type, 'issue') FROM pick_ticket_lines l WHERE l.pick_ticket_id = t.id LIMIT 1), t.request_type)
+    END AS request_type,
     t.manufacturing_order_id,
     CASE WHEN t.cancelled_at IS NOT NULL THEN 'cancelled' ELSE t.status END AS status,
     t.closed_at,
@@ -745,7 +788,10 @@ export function getPickTicket(id) {
          id,
          created_at,
          requester_name,
-         request_type,
+         CASE WHEN (SELECT COUNT(DISTINCT COALESCE(l.request_type, 'issue')) FROM pick_ticket_lines l WHERE l.pick_ticket_id = pick_tickets.id) > 1
+           THEN 'mixed'
+           ELSE COALESCE((SELECT COALESCE(l.request_type, 'issue') FROM pick_ticket_lines l WHERE l.pick_ticket_id = pick_tickets.id LIMIT 1), pick_tickets.request_type)
+         END AS request_type,
          manufacturing_order_id,
          CASE WHEN cancelled_at IS NOT NULL THEN 'cancelled' ELSE status END AS status,
          closed_at,
@@ -762,6 +808,7 @@ export function getPickTicket(id) {
          l.id,
          l.inventory_part_id,
          l.requested_quantity,
+         COALESCE(l.request_type, 'issue') AS request_type,
          l.lot_number,
          COALESCE(
            NULLIF(trim(p.part_id), ''),
@@ -806,6 +853,7 @@ export function getPickTicket(id) {
     lines: lines.map((ln) => ({
       ...ln,
       lot_number: String(ln.lot_number || ln.inventory_lot_number || "").trim(),
+      available_lots: listLotsForInventoryPart(ln.inventory_part_id),
       lot_issues: lotIssues.all(ln.id),
     })),
   };
@@ -830,7 +878,9 @@ export function createPickTicket({ requester_name, request_type, lines }) {
       throw new Error("requested_quantity must be a whole number ≥ 0");
     }
     if (!manufacturing_order_id) throw new Error("manufacturing_order_id is required");
-    return { inventory_part_id, manufacturing_order_id, component_part_id, requested_quantity };
+    const lineTypeRaw = String(ln?.request_type ?? requestType).trim().toLowerCase();
+    const lineRequestType = ["issue", "scrap", "return"].includes(lineTypeRaw) ? lineTypeRaw : requestType;
+    return { inventory_part_id, manufacturing_order_id, component_part_id, requested_quantity, request_type: lineRequestType };
   });
 
   const manufacturing_order_id = [...new Set(normalized.map((ln) => ln.manufacturing_order_id))]
@@ -861,8 +911,8 @@ export function createPickTicket({ requester_name, request_type, lines }) {
     const insLine = db.prepare(
       `INSERT INTO pick_ticket_lines (
          pick_ticket_id, inventory_part_id, manufacturing_order_id,
-         component_part_id, requested_quantity, lot_number
-       ) VALUES (?,?,?,?,?,?)`,
+         component_part_id, requested_quantity, lot_number, request_type
+       ) VALUES (?,?,?,?,?,?,?)`,
     );
     const invRow = db.prepare(
       `SELECT id, lot_number FROM inventory_parts WHERE id = ? AND is_active = 1`,
@@ -878,6 +928,7 @@ export function createPickTicket({ requester_name, request_type, lines }) {
         ln.component_part_id,
         ln.requested_quantity,
         lot,
+        ln.request_type,
       );
     }
     if (printConfig.enabled) {
@@ -949,7 +1000,7 @@ export function closePickTicket(id, { picker_name, line_lots, line_lot_issues })
   const tx = db.transaction(() => {
     const lines = db
       .prepare(
-        `SELECT l.id, l.inventory_part_id, l.requested_quantity,
+        `SELECT l.id, l.inventory_part_id, l.requested_quantity, COALESCE(l.request_type, 'issue') AS request_type,
                 p.part_id, p.part_revision_id, p.inventory_abbreviation_code,
                 p.lot_number AS inventory_lot_number
          FROM pick_ticket_lines l
@@ -1007,7 +1058,7 @@ export function closePickTicket(id, { picker_name, line_lots, line_lot_issues })
           }
           const current = Number(inventory.on_hand_quantity);
           const next =
-            cur.request_type === "return"
+            ln.request_type === "return"
               ? current + issue.issued_quantity
               : Math.max(0, current - issue.issued_quantity);
           updateLotOnHand.run(
@@ -1035,7 +1086,7 @@ export function closePickTicket(id, { picker_name, line_lots, line_lot_issues })
       const inv = readOnHand.get(ln.inventory_part_id);
       if (!inv) continue;
       let next = Number(inv.on_hand_quantity);
-      if (cur.request_type === "return") {
+      if (ln.request_type === "return") {
         next += qty;
       } else {
         next = Math.max(0, next - qty);
@@ -1144,7 +1195,7 @@ export function reopenPickTicket(id, { reopened_by }) {
 
     const lotIssues = db
       .prepare(
-        `SELECT li.lot_number, li.issued_quantity,
+        `SELECT li.lot_number, li.issued_quantity, COALESCE(l.request_type, 'issue') AS request_type,
                 p.part_id, p.part_revision_id, p.inventory_abbreviation_code
          FROM pick_ticket_lot_issues li
          JOIN pick_ticket_lines l ON l.id = li.pick_ticket_line_id
@@ -1182,7 +1233,7 @@ export function reopenPickTicket(id, { reopened_by }) {
         if (inv?.on_hand_quantity === null || inv?.on_hand_quantity === undefined) continue;
         const current = Number(inv.on_hand_quantity);
         const qty = Number(issue.issued_quantity);
-        const next = cur.request_type === "return" ? Math.max(0, current - qty) : current + qty;
+        const next = issue.request_type === "return" ? Math.max(0, current - qty) : current + qty;
         updateLotOnHand.run(
           next,
           issue.part_id,
@@ -1198,7 +1249,7 @@ export function reopenPickTicket(id, { reopened_by }) {
         const inv = readOnHand.get(ln.inventory_part_id);
         if (!inv) continue;
         let next = Number(inv.on_hand_quantity);
-        if (cur.request_type === "return") {
+        if (ln.request_type === "return") {
           next = Math.max(0, next - qty);
         } else {
           next += qty;

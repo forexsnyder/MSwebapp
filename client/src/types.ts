@@ -34,11 +34,13 @@ export type Order = {
 };
 
 export type RequestType = "issue" | "scrap" | "return";
+export type TicketRequestType = RequestType | "mixed";
 
 export type PickTicketLine = {
   id: number;
   inventory_part_id: number;
   requested_quantity: number;
+  request_type: RequestType;
   lot_number: string;
   part_id: string;
   part_revision_id: string;
@@ -54,6 +56,7 @@ export type PickTicketLine = {
   to_issue_quantity: number;
   mo_status_code_description: string;
   inventory_lot_number?: string;
+  available_lots?: InventoryLot[];
   lot_issues: LotIssue[];
 };
 
@@ -71,7 +74,7 @@ export type PickTicket = {
   id: number;
   created_at: string;
   requester_name: string;
-  request_type: RequestType;
+  request_type: TicketRequestType;
   manufacturing_order_id: string;
   status: "open" | "closed" | "cancelled";
   closed_at: string | null;
@@ -85,7 +88,7 @@ export type PickTicketSummary = {
   id: number;
   created_at: string;
   requester_name: string;
-  request_type: RequestType;
+  request_type: TicketRequestType;
   manufacturing_order_id: string;
   status: "open" | "closed" | "cancelled";
   line_count: number;

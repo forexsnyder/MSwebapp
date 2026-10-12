@@ -1,8 +1,8 @@
 import PDFDocument from "pdfkit";
 import { existsSync } from "node:fs";
 
-const widths = [78, 148, 136, 52, 46, 68, 68, 140];
-const headers = ["MO#", "Part ID - Item Description", "Description", "Requested", "On Hand", "Inv. ABBREV", "Location", "Lot # / Qty Issued"];
+const widths = [62, 42, 128, 122, 48, 46, 62, 64, 92, 70];
+const headers = ["MO#", "Type", "Part ID - Item Description", "Description", "Requested", "On Hand", "Inv. ABBREV", "Location", "Lot Number", "Qty Issued"];
 
 export function renderPickTicketPdf(ticket) {
   return new Promise((resolve, reject) => {
@@ -42,6 +42,21 @@ export function renderPickTicketPdf(ticket) {
         y = 28;
         doc.fontSize(16).fillColor("#111827").text(`TICKET-${String(ticket.id).padStart(6, "0")}`, 28, y);
         y += 27;
+        if (ticket.request_type !== "issue") {
+          const marker = ticket.request_type === "mixed"
+            ? "MIXED TICKET — VERIFY EACH LINE TYPE"
+            : `${String(ticket.request_type).toUpperCase()} — DO NOT PROCESS AS ISSUE`;
+          doc.rect(28, y, 736, 24).lineWidth(2).strokeColor("#111827").stroke();
+          doc.fillColor("#111827").fontSize(10).font("Helvetica-Bold").text(marker, 34, y + 7, { width: 724, align: "center", lineBreak: false });
+          doc.font(font);
+          y += 32;
+          const notice = ticket.request_type === "mixed"
+            ? "MIXED TICKET — Process each line according to its Type: Issue, Return, or Scrap."
+            : `DO NOT PICK — ${String(ticket.request_type).toUpperCase()} transaction. Complete this transaction according to procedure.`;
+          doc.rect(28, y, 736, 24).lineWidth(1).strokeColor("#111827").stroke();
+          doc.fillColor("#111827").fontSize(9).text(notice, 34, y + 7, { width: 724, lineBreak: false });
+          y += 32;
+        }
         for (const line of wrap(`${String(ticket.request_type).toUpperCase()}  |  Requester: ${ticket.requester_name}  |  Created: ${ticket.created_at}`, 736, 9)) {
           doc.fontSize(9).text(line, 28, y, { lineBreak: false }); y += 12;
         }
@@ -57,10 +72,12 @@ export function renderPickTicketPdf(ticket) {
       }
       pageHeader();
       for (const line of ticket.lines) {
-        const lots = (line.available_lots ?? []).map(lot => `${lot.lot_number}   Qty: ________`).join("\n") || "Lot: __________  Qty: ________";
-        const values = [line.manufacturing_order_id, line.part_id_item_description || line.part_id,
+        const lots = (line.available_lots ?? []).map(lot => lot.lot_number).filter(Boolean);
+        const lotValues = lots.length ? lots : ["________________"];
+        const qtyValues = lotValues.map(() => "________");
+        const values = [line.manufacturing_order_id, String(line.request_type ?? "issue").toUpperCase(), line.part_id_item_description || line.part_id,
           line.item_description || "No item description", line.requested_quantity, line.on_hand_quantity,
-          line.inventory_abbreviation_code, line.default_inventory_location_id, lots];
+          line.inventory_abbreviation_code, line.default_inventory_location_id, lotValues.join("\n"), qtyValues.join("\n")];
         const cells = values.map((value, i) => wrap(value, widths[i] - 8));
         let offset = 0;
         const total = Math.max(...cells.map(cell => cell.length), 2);
@@ -73,7 +90,12 @@ export function renderPickTicketPdf(ticket) {
           const height = count * 11 + 8;
           let x = 28;
           cells.forEach((cell, i) => {
-            doc.rect(x, y, widths[i], height).strokeColor("#9ca3af").stroke();
+            const lineType = String(line.request_type ?? "issue");
+            const border = doc.rect(x, y, widths[i], height)
+              .lineWidth(lineType === "scrap" ? 1.5 : lineType === "return" ? 1.25 : 0.5);
+            if (lineType === "scrap") border.dash(4);
+            border.strokeColor("#374151").stroke();
+            doc.undash();
             const section = offset > 0 && i < 2 && offset >= cell.length ? cell.slice(0, count) : cell.slice(offset, offset + count);
             section.forEach((text, row) => {
               doc.fontSize(8).fillColor("#111827").text(text, x + 4, y + 4 + row * 11, { lineBreak: false });

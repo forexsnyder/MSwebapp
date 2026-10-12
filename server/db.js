@@ -1051,23 +1051,23 @@ export function closePickTicket(id, { picker_name, line_lots, line_lot_issues })
             ln.inventory_abbreviation_code,
             issue.lot_number,
           );
-          if (inventory?.on_hand_quantity === null || inventory?.on_hand_quantity === undefined) {
-            throw new Error(
-              `lot ${issue.lot_number} is not available for ${ln.inventory_abbreviation_code}`,
+          // Lot text is picker-entered traceability data. It is intentionally
+          // accepted even when it is not present in the imported inventory/MO
+          // data; only a matching inventory row receives an on-hand adjustment.
+          if (inventory?.on_hand_quantity !== null && inventory?.on_hand_quantity !== undefined) {
+            const current = Number(inventory.on_hand_quantity);
+            const next =
+              ln.request_type === "return"
+                ? current + issue.issued_quantity
+                : Math.max(0, current - issue.issued_quantity);
+            updateLotOnHand.run(
+              next,
+              ln.part_id,
+              ln.part_revision_id,
+              ln.inventory_abbreviation_code,
+              issue.lot_number,
             );
           }
-          const current = Number(inventory.on_hand_quantity);
-          const next =
-            ln.request_type === "return"
-              ? current + issue.issued_quantity
-              : Math.max(0, current - issue.issued_quantity);
-          updateLotOnHand.run(
-            next,
-            ln.part_id,
-            ln.part_revision_id,
-            ln.inventory_abbreviation_code,
-            issue.lot_number,
-          );
           insertLotIssue.run(ln.id, issue.lot_number, issue.issued_quantity);
         }
         setLot.run(
@@ -1093,6 +1093,20 @@ export function closePickTicket(id, { picker_name, line_lots, line_lot_issues })
       }
       adjustOnHand.run(next, ln.inventory_part_id);
     }
+
+    appendAudit({
+      actor: picker,
+      action: "complete_pick_lot_entries",
+      entity: "pick_ticket",
+      entity_id: tid,
+      payload: {
+        picker_name: picker,
+        ticket_request_type: cur.request_type,
+        line_lot_issues: [...lotIssuesByLineId.entries()].flatMap(([line_id, issues]) =>
+          issues.map((issue) => ({ line_id, lot_number: issue.lot_number, issued_quantity: issue.issued_quantity }))),
+        line_lots: [...lotByLineId.entries()].map(([line_id, lot_number]) => ({ line_id, lot_number })),
+      },
+    });
 
     db.prepare(
       `UPDATE pick_tickets

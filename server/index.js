@@ -4,6 +4,7 @@ import ExcelJS from "exceljs";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
+import { renderPickTicketPdf } from "./print-ticket-pdf.js";
 import { printConfig } from "./print-config.js";
 import { createPrintWorker } from "./print-worker.js";
 import {
@@ -108,6 +109,25 @@ app.get("/api/printing/status", (req, res) => {
   }
   res.set("Cache-Control", "no-store");
   res.json({ enabled: printConfig.enabled, printer: printConfig.printer || null, ...printQueue.status(ticketId) });
+});
+
+// Preview only: manual printing never submits a job to CUPS.
+app.post("/api/printing/pdf", async (req, res) => {
+  const tickets = req.body?.tickets;
+  if (!Array.isArray(tickets) || !tickets.length || tickets.some(ticket =>
+    !ticket || !Number.isSafeInteger(ticket.id) || !Array.isArray(ticket.lines) || !ticket.lines.length
+  )) {
+    res.status(400).json({ error: "Tickets with lines are required." });
+    return;
+  }
+  try {
+    const pdf = await renderPickTicketPdf(tickets);
+    res.set({ "Content-Type": "application/pdf", "Content-Disposition": 'inline; filename="pick-tickets.pdf"', "Cache-Control": "no-store" });
+    res.send(pdf);
+  } catch (error) {
+    console.error("Could not render manual print PDF", error);
+    res.status(500).json({ error: "Could not prepare the print PDF." });
+  }
 });
 
 app.get("/api/parts", (_req, res) => {

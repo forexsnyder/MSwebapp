@@ -114,3 +114,10 @@ test("PDF generation includes a landscape page and paginates long rows without t
   assert.match(text, /\/MediaBox \[0 0 792 612\]/);
   assert.ok((text.match(/\/Type \/Page\b/g) ?? []).length >= 3);
 });
+
+ test("manual batches use the automatic landscape template with a fresh page per ticket", async () => {
+  const pdf = await renderPickTicketPdf([ticket, { ...ticket, id: 2 }]);
+  const text = pdf.toString("latin1");
+  assert.match(text, /\/MediaBox \[0 0 792 612\]/);
+  assert.equal((text.match(/\/Type \/Page\b/g) ?? []).length, 2);
+});

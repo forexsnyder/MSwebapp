@@ -1,10 +1,12 @@
 import PDFDocument from "pdfkit";
 import { existsSync } from "node:fs";
 
-const widths = [62, 42, 128, 122, 48, 46, 62, 64, 92, 70];
+const widths = [62, 42, 128, 114, 56, 46, 62, 64, 92, 70];
 const headers = ["MO#", "Type", "Part ID - Item Description", "Description", "Requested", "On Hand", "Inv. ABBREV", "Location", "Lot Number", "Qty Issued"];
 
-export function renderPickTicketPdf(ticket) {
+export function renderPickTicketPdf(ticketOrTickets) {
+  const tickets = Array.isArray(ticketOrTickets) ? ticketOrTickets : [ticketOrTickets];
+  const ticket = tickets[0];
   return new Promise((resolve, reject) => {
     const doc = new PDFDocument({ size: "LETTER", layout: "landscape", margin: 28, bufferPages: true,
       info: { Title: `TICKET-${String(ticket.id).padStart(6, "0")}`, Author: "MSI Picker" } });
@@ -38,7 +40,9 @@ export function renderPickTicketPdf(ticket) {
       }
       let y;
       let tableTop;
+      let currentTicket = ticket;
       function pageHeader() {
+        const ticket = currentTicket;
         y = 28;
         doc.fontSize(16).fillColor("#111827").text(`TICKET-${String(ticket.id).padStart(6, "0")}`, 28, y);
         y += 27;
@@ -70,40 +74,46 @@ export function renderPickTicketPdf(ticket) {
         y += 30;
         tableTop = y;
       }
-      pageHeader();
-      for (const line of ticket.lines) {
-        const lots = (line.available_lots ?? []).map(lot => lot.lot_number).filter(Boolean);
-        const lotValues = lots.length ? lots : ["________________"];
-        const qtyValues = lotValues.map(() => "________");
-        const values = [line.manufacturing_order_id, String(line.request_type ?? "issue").toUpperCase(), line.part_id_item_description || line.part_id,
-          line.item_description || "No item description", line.requested_quantity, line.on_hand_quantity,
-          line.inventory_abbreviation_code, line.default_inventory_location_id, lotValues.join("\n"), qtyValues.join("\n")];
-        const cells = values.map((value, i) => wrap(value, widths[i] - 8));
-        let offset = 0;
-        const total = Math.max(...cells.map(cell => cell.length), 2);
-        const rowHeight = total * 11 + 8;
-        if (rowHeight <= 566 - tableTop && y + rowHeight > 566) { doc.addPage(); pageHeader(); }
-        while (offset < total) {
-          if (y + 32 > 566) { doc.addPage(); pageHeader(); }
-          const count = Math.min(total - offset, Math.floor((566 - y - 8) / 11));
-          if (count < 1) throw new Error("Ticket header is too large to fit on a page.");
-          const height = count * 11 + 8;
-          let x = 28;
-          cells.forEach((cell, i) => {
-            const lineType = String(line.request_type ?? "issue");
-            const border = doc.rect(x, y, widths[i], height)
-              .lineWidth(lineType === "scrap" ? 1.5 : lineType === "return" ? 1.25 : 0.5);
-            if (lineType === "scrap") border.dash(4);
-            border.strokeColor("#374151").stroke();
-            doc.undash();
-            const section = offset > 0 && i < 2 && offset >= cell.length ? cell.slice(0, count) : cell.slice(offset, offset + count);
-            section.forEach((text, row) => {
-              doc.fontSize(8).fillColor("#111827").text(text, x + 4, y + 4 + row * 11, { lineBreak: false });
+      for (const [index, ticket] of tickets.entries()) {
+        if (index > 0) doc.addPage();
+        currentTicket = ticket;
+        pageHeader();
+        for (const line of ticket.lines) {
+          const lots = ticket.status === "closed"
+            ? [line.lot_number].filter(Boolean)
+            : (line.available_lots ?? []).map(lot => lot.lot_number).filter(Boolean);
+          const lotValues = lots.length ? lots : [""];
+          const qtyValues = lotValues.map(lot => line.print_lot_quantities?.[lot] || "");
+          const values = [line.manufacturing_order_id, String(line.request_type ?? "issue").toUpperCase(), line.part_id_item_description || line.part_id,
+            line.item_description || "No item description", line.requested_quantity, line.on_hand_quantity,
+            line.inventory_abbreviation_code, line.default_inventory_location_id, lotValues.join("\n"), qtyValues.join("\n")];
+          const cells = values.map((value, i) => wrap(value, widths[i] - 8));
+          let offset = 0;
+          const total = Math.max(...cells.map(cell => cell.length), 2);
+          const rowHeight = total * 11 + 8;
+          if (rowHeight <= 566 - tableTop && y + rowHeight > 566) { doc.addPage(); pageHeader(); }
+          while (offset < total) {
+            if (y + 32 > 566) { doc.addPage(); pageHeader(); }
+            const count = Math.min(total - offset, Math.floor((566 - y - 8) / 11));
+            if (count < 1) throw new Error("Ticket header is too large to fit on a page.");
+            const height = count * 11 + 8;
+            let x = 28;
+            cells.forEach((cell, i) => {
+              const lineType = String(line.request_type ?? "issue");
+              const border = doc.rect(x, y, widths[i], height)
+                .lineWidth(lineType === "scrap" ? 1.5 : lineType === "return" ? 1.25 : 0.5);
+              if (lineType === "scrap") border.dash(4);
+              border.strokeColor("#374151").stroke();
+              doc.undash();
+              const section = offset > 0 && i < 2 && offset >= cell.length ? cell.slice(0, count) : cell.slice(offset, offset + count);
+              section.forEach((text, row) => {
+                doc.fontSize(8).fillColor("#111827").text(text, x + 4, y + 4 + row * 11, { lineBreak: false });
+              });
+              x += widths[i];
             });
-            x += widths[i];
-          });
-          y += height;
-          offset += count;
+            y += height;
+            offset += count;
+          }
         }
       }
       const pages = doc.bufferedPageRange();

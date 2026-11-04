@@ -308,7 +308,7 @@ export function PickOrdersPage() {
     return (await res.json()) as PickTicket;
   }
 
-  function handlePrintTicket() {
+  async function handlePrintTicket() {
     if (!selected) return;
     if (selected.lines.length === 0) {
       setError("This ticket has no lines to print.");
@@ -317,7 +317,7 @@ export function PickOrdersPage() {
     setError(null);
     setPrinting(true);
     try {
-      printPickTicket(ticketForPrint(selected), {
+      await printPickTicket(ticketForPrint(selected), {
         lotByLineId: Object.fromEntries(selected.lines.map((ln) => [ln.id, lotSummaryForLine(ln)])),
         lotOptionsByLineId: Object.fromEntries(
           selected.lines.map((ln) => [
@@ -351,7 +351,7 @@ export function PickOrdersPage() {
         return;
       }
       const label = queueTab === "open" ? "Open pick tickets" : "Closed pick tickets";
-      printPickTickets(
+      await printPickTickets(
         printable.map((t) => ticketForPrint(t)),
         {
           title: `${label} (${printable.length})`,

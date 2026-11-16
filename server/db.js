@@ -688,6 +688,12 @@ function formatTicketRef(id) {
   return `TICKET-${String(id).padStart(6, "0")}`;
 }
 
+const findOpenTicket = db.prepare("SELECT 1 FROM pick_tickets WHERE status = 'open' AND cancelled_at IS NULL LIMIT 1");
+
+export function hasOpenPickTickets() {
+  return Boolean(findOpenTicket.get());
+}
+
 export function listPickTickets({ includeCancelled = false, status, q } = {}) {
   const parts = [];
   const params = [];

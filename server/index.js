@@ -5,6 +5,7 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import { renderPickTicketPdf } from "./print-ticket-pdf.js";
+import { createShellyQueueIndicator } from "./shelly-queue-indicator.js";
 import { printConfig } from "./print-config.js";
 import { createPrintWorker } from "./print-worker.js";
 import {
@@ -23,6 +24,7 @@ import {
   importInventoryWorkbook,
   importInventoryWorkbookBuffer,
   listAuditLog,
+  hasOpenPickTickets,
   listPickTickets,
   listUserPickTicketHistory,
   listNotifications,
@@ -457,6 +459,8 @@ server.headersTimeout = Number(process.env.HEADERS_TIMEOUT_MS ?? 610000);
 
 const printWorker = createPrintWorker({ queue: printQueue, config: printConfig });
 printWorker.start();
+const shelly = createShellyQueueIndicator({ host: process.env.SHELLY_QUEUE_HOST?.trim(), hasOpenTickets: hasOpenPickTickets });
+shelly.start();
 for (const signal of ["SIGTERM", "SIGINT"]) {
-  process.once(signal, () => { printWorker.stop(); server.close(); });
+  process.once(signal, () => { shelly.stop(); printWorker.stop(); server.close(); });
 }
